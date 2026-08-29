@@ -90,10 +90,10 @@ Determine:
 
 ### 2.1 Open beatmapset
 
-- [ ] Add ability to select an `.osz`.
-- [ ] Validate that the archive is readable.
-- [ ] Create unique temporary working directory.
-- [ ] Extract `.osz` contents once.
+- [x] Add ability to select an `.osz`.
+- [x] Validate that the archive is readable.
+- [x] Create unique temporary working directory.
+- [x] Extract `.osz` contents once.
 
 Example:
 
@@ -108,34 +108,34 @@ temp/
         └── Insane.osu
 ```
 
-- [ ] Prevent zip-slip/path-traversal during extraction.
-- [ ] Preserve nested asset directories if present.
+- [x] Prevent zip-slip/path-traversal during extraction.
+- [x] Preserve nested asset directories if present.
 
 ### 2.2 Discover difficulties
 
-- [ ] Find all `.osu` files.
-- [ ] Parse enough metadata to display:
-  - version/difficulty name
-  - mode
-  - mapper
-  - AR
-  - OD
-  - CS
-  - HP
-  - length if conveniently available
-- [ ] Present difficulties in a selector.
-- [ ] Reject/disable unsupported modes appropriately.
+- [x] Find all `.osu` files.
+- [x] Parse enough metadata to display:
+  - [x] version/difficulty name
+  - [x] mode
+  - [x] mapper
+  - [x] AR
+  - [x] OD
+  - [x] CS
+  - [x] HP
+  - [x] length if conveniently available
+- [x] Present difficulties in a selector.
+- [x] Reject/disable unsupported modes appropriately.
 
 ### 2.3 Resolve assets
 
 For selected difficulty:
 
-- [ ] Resolve `AudioFilename`.
-- [ ] Verify audio exists.
-- [ ] Resolve background when available.
-- [ ] Handle Unicode filenames.
-- [ ] Handle relative paths safely.
-- [ ] Give useful errors for missing assets.
+- [x] Resolve `AudioFilename`.
+- [x] Verify audio exists.
+- [x] Resolve background when available.
+- [x] Handle Unicode filenames.
+- [x] Handle relative paths safely.
+- [x] Give useful errors for missing assets.
 
 ### 2.4 Working-copy semantics
 
@@ -151,10 +151,10 @@ source archive
              └── mutable .osu
 ```
 
-- [ ] Never edit source archive during the session.
-- [ ] Track whether working copy has unsaved changes.
-- [ ] Allow session cleanup.
-- [ ] Clean temporary data on normal exit.
+- [x] Never edit source archive during the session.
+- [x] Track whether working copy has unsaved changes.
+- [x] Allow session cleanup.
+- [x] Clean temporary data on normal exit.
 - [ ] Gracefully handle stale temp sessions after crashes if necessary.
 
 ## Phase 3 — Inpaint GUI
@@ -276,30 +276,30 @@ add_to_beatmap = true
 ...
 ```
 
-- [ ] Do not shell out to another full Mapperatorinator instance if avoidable.
-- [ ] Call existing inference components directly/shared through the application's normal backend.
-- [ ] Reuse already-loaded model.
+- [x] Do not shell out to another full Mapperatorinator instance if avoidable.
+- [x] Call existing inference components directly/shared through the application's normal backend.
+- [ ] Reuse already-loaded model. *(The workflow accepts the shared runner; GUI-owned server wiring is M3.)*
 
 ### 4.2 Safe generation transaction
 
 Before generation:
 
-- [ ] Snapshot current working `.osu`.
+- [x] Snapshot current working `.osu`.
 
 Generate replacement.
 
 On success:
 
-- [ ] Validate output parses.
-- [ ] Commit new version to working copy.
-- [ ] Mark session dirty.
-- [ ] Refresh UI metadata where necessary.
+- [x] Validate output parses.
+- [x] Commit new version to working copy.
+- [x] Mark session dirty.
+- [ ] Refresh UI metadata where necessary. *(Session metadata is available; GUI binding is M3.)*
 
 On failure:
 
-- [ ] Restore previous valid `.osu`.
-- [ ] Surface useful error.
-- [ ] Do not destroy previous successful generation.
+- [x] Restore previous valid `.osu`.
+- [x] Surface useful error.
+- [x] Do not destroy previous successful generation.
 
 ### 4.3 Boundary behavior
 
@@ -396,12 +396,12 @@ Doesn't initially need a fancy UI, but store enough information that one can be 
 
 When requested:
 
-- [ ] Package current working directory.
-- [ ] Include all original assets.
-- [ ] Include modified `.osu`.
-- [ ] Preserve other difficulties unchanged.
-- [ ] Produce valid `.osz`.
-- [ ] Avoid accidentally nesting the session directory inside archive.
+- [x] Package current working directory.
+- [x] Include all original assets.
+- [x] Include modified `.osu`.
+- [x] Preserve other difficulties unchanged.
+- [x] Produce valid `.osz`.
+- [x] Avoid accidentally nesting the session directory inside archive.
 
 Correct:
 
@@ -654,6 +654,8 @@ Treat these as hard stopping points rather than trying to implement the entire b
 **Status:** Complete (2026-08-29). See `M1_INFERENCE_PROOF.md`.
 
 **M2 — Prove `.osz` workflow:** Open `.osz` → extract → choose difficulty → regenerate → export valid modified `.osz`.
+
+**Status:** Complete (2026-08-29). See `M2_OSZ_WORKFLOW_PROOF.md`.
 
 **M3 — Usable Inpaint tab:** All important conditioning controls exposed, model shared with Generate, repeated regeneration works.
 
