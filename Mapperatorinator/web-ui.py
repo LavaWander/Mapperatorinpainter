@@ -37,6 +37,9 @@ from osuT5.osuT5.event import ContextType
 from osuT5.osuT5.inference.server import InferenceClient
 from osuT5.osuT5.utils import load_model_loaders
 from inference import compile_args, get_server_address, main, should_load_separate_timing_model
+from inpainting.session import BeatmapsetSession
+from inpainting.ui import compose_inpainting_config, session_payload
+from inpainting.workflow import regenerate_interval, restore_snapshot
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 template_folder = os.path.join(script_dir, 'template')
@@ -160,6 +163,11 @@ CSRF_PROTECTED_ENDPOINTS = {
     'validate_paths',
     'open_folder',
     'open_log_file',
+    'open_inpaint_session',
+    'select_inpaint_difficulty',
+    'start_inpaint',
+    'export_inpaint_session',
+    'close_inpaint_session',
 }
 
 
@@ -290,6 +298,8 @@ cancelled_jobs = set()
 process_lock = threading.Lock()
 owned_server_clients = {}
 owned_server_clients_lock = threading.Lock()
+inpaint_sessions = {}
+inpaint_sessions_lock = threading.Lock()
 shutdown_lock = threading.Lock()
 shutdown_started = False
 
@@ -406,7 +416,20 @@ def _shutdown_application_resources():
         shutdown_started = True
 
     _shutdown_inference_processes()
+    with inpaint_sessions_lock:
+        sessions = list(inpaint_sessions.values())
+        inpaint_sessions.clear()
+    for session in sessions:
+        try:
+            session.cleanup()
+        except Exception:
+            traceback.print_exc()
     _shutdown_owned_model_servers()
+
+
+# Session/model cleanup also applies when the Flask app is imported by a host,
+# not only when this file launches the embedded window itself.
+atexit.register(_shutdown_application_resources)
 
 
 def _coerce_optional_int(v):
@@ -490,6 +513,49 @@ def _inference_worker(cfg: InferenceConfig, out_q: mp.Queue):
         except Exception:
             pass
         out_q.put({"_event": "exit", "code": 1})
+
+
+def _inpaint_worker(
+    cfg: InferenceConfig,
+    session: BeatmapsetSession,
+    out_q: mp.Queue,
+    success_event: mp.Event,
+):
+    """Run the M2 generation transaction while reusing the UI-owned model server."""
+    import sys as _sys
+    import traceback as _traceback
+
+    try:
+        qw = _QueueWriter(out_q)
+        _sys.stdout = qw
+        _sys.stderr = qw
+        regenerate_interval(session, cfg, main)
+        success_event.set()
+        qw.flush()
+        out_q.put({"_event": "exit", "code": 0})
+    except Exception as exc:
+        try:
+            out_q.put(str(exc))
+            out_q.put(_traceback.format_exc())
+        except Exception:
+            pass
+        out_q.put({"_event": "exit", "code": 1})
+
+
+def _get_inpaint_session(session_id: str) -> BeatmapsetSession:
+    with inpaint_sessions_lock:
+        session = inpaint_sessions.get(session_id)
+    if session is None:
+        raise ValueError("Inpaint session was not found. Open the .osz again.")
+    return session
+
+
+def _session_has_active_job(session_id: str) -> bool:
+    with process_lock:
+        return any(
+            record.get("inpaint_session_id") == session_id and record["process"].is_alive()
+            for record in processes.values()
+        )
 
 
 # --- Flask Routes ---
@@ -653,6 +719,144 @@ def start_inference():
         return jsonify({"status": "error", "message": f"Failed to start process: {e}"}), 500
 
 
+@app.route('/inpaint/open', methods=['POST'])
+def open_inpaint_session():
+    """Extract an immutable source `.osz` once and return its selectable difficulties."""
+    source_path = (request.form.get('path') or '').strip()
+    if not source_path:
+        return jsonify({"status": "error", "message": "Choose an .osz beatmapset first."}), 400
+
+    session = None
+    session_id = None
+    try:
+        session = BeatmapsetSession.open(source_path)
+        session_id = uuid.uuid4().hex
+        payload = session_payload(session_id, session)
+        with inpaint_sessions_lock:
+            inpaint_sessions[session_id] = session
+        return jsonify({"status": "success", "session": payload})
+    except Exception as exc:
+        if session is not None:
+            with inpaint_sessions_lock:
+                if session_id is not None:
+                    inpaint_sessions.pop(session_id, None)
+            session.cleanup()
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/inpaint/select-difficulty', methods=['POST'])
+def select_inpaint_difficulty():
+    session_id = (request.form.get('session_id') or '').strip()
+    previous_difficulty = None
+    try:
+        session = _get_inpaint_session(session_id)
+        if _session_has_active_job(session_id):
+            raise ValueError("Wait for the current regeneration to finish before changing difficulty.")
+        previous_difficulty = session.active_difficulty
+        session.select_difficulty(request.form.get('relative_path') or '')
+        return jsonify({"status": "success", "session": session_payload(session_id, session)})
+    except Exception as exc:
+        if previous_difficulty is not None:
+            session.active_difficulty = previous_difficulty
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/inpaint/start', methods=['POST'])
+def start_inpaint():
+    """Start one transactional interval regeneration through the shared inference server."""
+    session_id = (request.form.get('session_id') or '').strip()
+    model_name = (request.form.get('model') or 'v32').strip()
+    try:
+        session = _get_inpaint_session(session_id)
+        if _session_has_active_job(session_id):
+            raise ValueError("This Inpaint session already has a regeneration running.")
+
+        values = {key: request.form.get(key, '') for key in request.form.keys()}
+        values['timing_context'] = 'true' if 'timing_context' in request.form else 'false'
+        cfg = compose_inpainting_config(
+            config_dir=Path(__file__).parent / "configs/inference",
+            model_name=model_name,
+            session=session,
+            values=values,
+            descriptors=request.form.getlist('descriptors'),
+            negative_descriptors=request.form.getlist('negative_descriptors'),
+        )
+        _validate_year_for_model(model_name, cfg.year)
+        compile_args(cfg, verbose=False)
+        cfg.use_server = True
+        _ensure_inference_server(cfg)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": f"Could not prepare Inpaint generation: {exc}"}), 500
+
+    try:
+        job_id = uuid.uuid4().hex
+        q = mp.Queue()
+        success_event = mp.Event()
+        active_path = session.active_difficulty.path
+        snapshot = active_path.read_bytes()
+        process = mp.Process(
+            target=_inpaint_worker,
+            args=(cfg, session, q, success_event),
+            daemon=True,
+        )
+        process.start()
+        with process_lock:
+            processes[job_id] = {
+                "process": process,
+                "queue": q,
+                "inpaint_session_id": session_id,
+                "inpaint_path": active_path,
+                "inpaint_snapshot": snapshot,
+                "success_event": success_event,
+            }
+        return jsonify({
+            "status": "success",
+            "message": "Inpaint regeneration started",
+            "job_id": job_id,
+            "seed": cfg.seed,
+            "start_time": cfg.start_time,
+            "end_time": cfg.end_time,
+        }), 202
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": f"Failed to start Inpaint process: {exc}"}), 500
+
+
+@app.route('/inpaint/export', methods=['POST'])
+def export_inpaint_session():
+    session_id = (request.form.get('session_id') or '').strip()
+    try:
+        session = _get_inpaint_session(session_id)
+        if _session_has_active_job(session_id):
+            raise ValueError("Wait for regeneration to finish before exporting.")
+        destination = session.export(
+            request.form.get('destination') or '',
+            overwrite=(request.form.get('overwrite') == 'true'),
+        )
+        return jsonify({"status": "success", "path": str(destination)})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/inpaint/close', methods=['POST'])
+def close_inpaint_session():
+    session_id = (request.form.get('session_id') or '').strip()
+    try:
+        if _session_has_active_job(session_id):
+            raise ValueError("Wait for regeneration to finish before closing the session.")
+        with inpaint_sessions_lock:
+            session = inpaint_sessions.pop(session_id, None)
+        if session is not None:
+            session.cleanup()
+        return jsonify({"status": "success"})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
 @app.route('/stream_output')
 def stream_output():
     """Streams the output of the running inference process using SSE."""
@@ -707,6 +911,21 @@ def stream_output():
             error_occurred = True
             full_output_lines.append(f"\n--- STREAMING ERROR ---\n{e}\n")
         finally:
+            # Synchronize a child-process transaction into the parent-owned session.
+            # Forced cancellation cannot execute the child's exception handler, so
+            # the parent also owns a pristine snapshot for atomic rollback.
+            session_id = rec.get("inpaint_session_id")
+            if session_id:
+                succeeded = exit_code == 0 and rec["success_event"].is_set()
+                try:
+                    session = _get_inpaint_session(session_id)
+                    if succeeded:
+                        session.mark_dirty()
+                    else:
+                        restore_snapshot(rec["inpaint_path"], rec["inpaint_snapshot"])
+                except Exception:
+                    traceback.print_exc()
+
             # Save logs on error (same behavior as before).
             if error_occurred:
                 try:
@@ -998,8 +1217,6 @@ def launch_webview_window(window_title, flask_url, window_width, window_height, 
 if __name__ == '__main__':
     # Use spawn instead of fork to avoid issues with CUDA on Linux
     multiprocessing.set_start_method('spawn', force=True)
-    atexit.register(_shutdown_application_resources)
-
     # Find an available port for Flask
     flask_port = find_available_port()
 

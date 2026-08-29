@@ -48,7 +48,8 @@ def build_inpainting_config(
     return config
 
 
-def _atomic_restore(path: Path, content: bytes) -> None:
+def restore_snapshot(path: Path, content: bytes) -> None:
+    """Atomically restore a previously captured `.osu` snapshot."""
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -86,7 +87,7 @@ def regenerate_interval(
                 f"Generated working difficulty did not parse: {active_path}: {exc}"
             ) from exc
     except Exception as exc:
-        _atomic_restore(active_path, snapshot)
+        restore_snapshot(active_path, snapshot)
         if isinstance(exc, GenerationTransactionError):
             raise
         raise GenerationTransactionError(
@@ -95,4 +96,3 @@ def regenerate_interval(
 
     session.mark_dirty()
     return result
-

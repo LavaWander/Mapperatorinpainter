@@ -348,6 +348,11 @@ $(document).ready(function() {
                                 'Audio Files (*.mp3;*.wav;*.ogg;*.m4a;*.flac)',
                                 'All files (*.*)'
                             ];
+                        } else if (browseType === 'osz') {
+                            fileTypes = [
+                                'osu! Beatmapsets (*.osz)',
+                                'All files (*.*)'
+                            ];
                         }
 
                         path = await window.pywebview.api.browse_file(fileTypes);
@@ -1241,9 +1246,9 @@ $(document).ready(function() {
             return '';
         },
 
-        startInference(job, formData) {
+        startInference(job, formData, endpoint = "/start_inference", onStarted = null) {
             $.ajax({
-                url: "/start_inference",
+                url: endpoint,
                 method: "POST",
                 data: formData,
                 processData: false,
@@ -1262,6 +1267,7 @@ $(document).ready(function() {
                     AppState.jobs.delete(job.tempKey);
                     AppState.jobs.set(jobId, job);
                     AppState.lastStartedJobId = jobId;
+                    if (onStarted) onStarted(response);
                     this.connectToSSE(job);
                 },
                 error: (jqXHR, textStatus, errorThrown) => {
@@ -1277,6 +1283,7 @@ $(document).ready(function() {
                     }
                     Utils.showFlashMessage(errorMsg, 'error');
                     this.removeJob(job.id, job.elements.$card);
+                    if (job.onStartError) job.onStartError(errorMsg);
                 }
             });
         },
@@ -1435,6 +1442,10 @@ $(document).ready(function() {
             }
 
             job.elements.$cancelButton.hide();
+            if (!job.completionNotified && job.onComplete) {
+                job.completionNotified = true;
+                job.onComplete(false);
+            }
         },
 
         handleSSEEnd(job, e) {
@@ -1474,6 +1485,10 @@ $(document).ready(function() {
             job.elements.$cancelButton.hide();
             job.isCancelled = false;
             job.cancelState = 'idle';
+            if (!job.completionNotified && job.onComplete) {
+                job.completionNotified = true;
+                job.onComplete(!job.inferenceErrorOccurred && !endWithErrors);
+            }
         },
 
         handleInferenceError(job) {
@@ -1555,6 +1570,188 @@ $(document).ready(function() {
         }
     };
 
+    const ModeManager = {
+        init() {
+            $('.mode-tab').on('click', (event) => this.select($(event.currentTarget).data('mode')));
+        },
+
+        select(mode) {
+            $('.mode-tab').each((_, button) => {
+                const active = $(button).data('mode') === mode;
+                $(button).toggleClass('active', active).attr('aria-selected', active ? 'true' : 'false');
+            });
+            $('.mode-panel').removeClass('active').attr('hidden', true);
+            $(`#${mode}-panel`).addClass('active').removeAttr('hidden');
+        }
+    };
+
+    const InpaintManager = {
+        session: null,
+        busy: false,
+
+        init() {
+            $('#inpaint-open-button').on('click', () => this.open());
+            $('#inpaint_difficulty').on('change', () => this.selectDifficulty());
+            $('#inpaintForm').on('submit', (event) => this.regenerate(event));
+            $('#inpaint-export-button').on('click', () => this.exportBeatmapset());
+            $('#inpaint_model').on('change', () => this.updateModelControls());
+            this.updateModelControls();
+        },
+
+        updateModelControls() {
+            const model = $('#inpaint_model').val();
+            const capabilities = AppState.modelCapabilities[model] || {};
+            const descriptorsSupported = capabilities.supportsDescriptors !== false;
+            $('#inpaint_descriptors, #inpaint_negative_descriptors').prop('disabled', !descriptorsSupported);
+
+            const yearSupported = capabilities.supportsYear !== false;
+            $('#inpaint_year').prop('disabled', !yearSupported)
+                .attr('max', capabilities.maxYear || AppState.yearRange.defaultMax);
+
+            const forceHitsounds = capabilities.hideHitsoundsOption === true;
+            $('#inpaint_hitsounds').prop('disabled', forceHitsounds);
+            if (forceHitsounds) $('#inpaint_hitsounds').val('yes');
+        },
+
+        setBusy(busy) {
+            this.busy = busy;
+            $('#inpaint-generate-button').prop('disabled', busy || !this.session)
+                .text(busy ? 'Regenerating…' : 'Regenerate interval');
+            $('#inpaint-open-button').prop('disabled', busy);
+            $('#inpaint_difficulty').prop('disabled', busy || !this.session);
+            $('#inpaint-export-button').prop('disabled', busy || !this.session);
+        },
+
+        request(url, data) {
+            return $.ajax({ url, method: 'POST', data });
+        },
+
+        async open() {
+            const path = ($('#inpaint_osz_path').val() || '').trim();
+            if (!path.toLowerCase().endsWith('.osz')) {
+                Utils.showFlashMessage('Choose a valid .osz beatmapset.', 'error');
+                return;
+            }
+            this.setBusy(true);
+            try {
+                const response = await this.request('/inpaint/open', { path });
+                this.renderSession(response.session);
+                Utils.showFlashMessage(`Opened ${response.session.source_name}.`);
+            } catch (error) {
+                Utils.showFlashMessage(error.responseJSON?.message || 'Could not open beatmapset.', 'error');
+            } finally {
+                this.setBusy(false);
+            }
+        },
+
+        renderSession(session) {
+            this.session = session;
+            const active = session.active_difficulty;
+            const $difficulty = $('#inpaint_difficulty').empty();
+            session.difficulties.forEach((difficulty) => {
+                const label = `${difficulty.version} · mode ${difficulty.mode}${difficulty.supported ? '' : ' (unsupported)'}`;
+                $('<option>').val(difficulty.relative_path).text(label)
+                    .prop('disabled', !difficulty.supported)
+                    .prop('selected', difficulty.relative_path === active.relative_path)
+                    .appendTo($difficulty);
+            });
+
+            $('#inpaint_audio').text(session.assets.audio || 'Missing');
+            $('#inpaint_length').text(active.length);
+            $('#inpaint_title').text(session.metadata.title || '—');
+            $('#inpaint_artist').text(session.metadata.artist || '—');
+            $('#inpaint_mode').text(active.mode);
+            $('#inpaint_mapper').text(active.mapper || '—');
+            $('#inpaint_cs').text(active.cs);
+            $('#inpaint_ar').text(active.ar);
+            $('#inpaint_od').text(active.od);
+            $('#inpaint_hp').text(active.hp);
+            $('#inpaint_slider_multiplier').text(session.metadata.slider_multiplier);
+            $('#inpaint_slider_tick_rate').text(session.metadata.slider_tick_rate);
+            $('#inpaint-session-state').text(session.dirty ? 'Working copy modified' : 'Working copy ready')
+                .toggleClass('dirty', Boolean(session.dirty));
+
+            const defaultEnd = Math.min(active.length_ms || 10000, 10000);
+            if (!$('#inpaint_end_time').data('user-edited')) {
+                $('#inpaint_end_time').val(this.formatTimestamp(defaultEnd));
+            }
+            $('#inpaint_start_time, #inpaint_end_time').off('input.inpaint').on('input.inpaint', function() {
+                $(this).data('user-edited', true);
+            });
+            this.setBusy(false);
+        },
+
+        formatTimestamp(milliseconds) {
+            const value = Math.max(0, Number(milliseconds) || 0);
+            const minutes = Math.floor(value / 60000);
+            const seconds = Math.floor((value % 60000) / 1000);
+            const ms = Math.floor(value % 1000);
+            return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(ms).padStart(3, '0')}`;
+        },
+
+        async selectDifficulty() {
+            if (!this.session || this.busy) return;
+            try {
+                const response = await this.request('/inpaint/select-difficulty', {
+                    session_id: this.session.session_id,
+                    relative_path: $('#inpaint_difficulty').val()
+                });
+                this.renderSession(response.session);
+            } catch (error) {
+                Utils.showFlashMessage(error.responseJSON?.message || 'Could not select difficulty.', 'error');
+                this.renderSession(this.session);
+            }
+        },
+
+        regenerate(event) {
+            event.preventDefault();
+            if (!this.session || this.busy) return;
+
+            this.setBusy(true);
+            InferenceManager.removeFinishedCards();
+            const formData = new FormData($('#inpaintForm')[0]);
+            formData.set('session_id', this.session.session_id);
+            if ($('#inpaint_model').val() === 'v30') formData.set('hitsounds', 'yes');
+            const job = InferenceManager.createJobCard(`Inpaint · ${this.session.active_difficulty.version}`);
+            job.onStartError = () => this.setBusy(false);
+            job.onComplete = (success) => {
+                this.setBusy(false);
+                if (success) {
+                    this.session.dirty = true;
+                    $('#inpaint-session-state').text('Working copy modified').addClass('dirty');
+                    Utils.showFlashMessage('Interval regenerated in the working copy.');
+                }
+            };
+            InferenceManager.startInference(job, formData, '/inpaint/start', (response) => {
+                $('#inpaint_seed').val(response.seed);
+                $('#inpaint_start_time').val(this.formatTimestamp(response.start_time));
+                $('#inpaint_end_time').val(this.formatTimestamp(response.end_time));
+            });
+        },
+
+        async exportBeatmapset() {
+            if (!this.session || this.busy) return;
+            const sourceStem = this.session.source_name.replace(/\.osz$/i, '');
+            let destination = null;
+            if (window.pywebview?.api?.save_file) {
+                destination = await window.pywebview.api.save_file(`${sourceStem}-inpainted.osz`);
+            } else {
+                destination = window.prompt('Export destination (.osz):', `${sourceStem}-inpainted.osz`);
+            }
+            if (!destination) return;
+            if (!destination.toLowerCase().endsWith('.osz')) destination += '.osz';
+            try {
+                const response = await this.request('/inpaint/export', {
+                    session_id: this.session.session_id,
+                    destination
+                });
+                Utils.showFlashMessage(`Exported ${response.path}.`);
+            } catch (error) {
+                Utils.showFlashMessage(error.responseJSON?.message || 'Could not export beatmapset.', 'error');
+            }
+        }
+    };
+
     // Initialize all components
     function initializeApp() {
         // Initialize language selector
@@ -1603,6 +1800,8 @@ $(document).ready(function() {
         DescriptorManager.init();
         ConfigManager.init();
         InferenceManager.init();
+        ModeManager.init();
+        InpaintManager.init();
 
         // Attach event handlers
         $("#model").on('change', () => UIManager.updateModelSettings());

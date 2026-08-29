@@ -173,9 +173,9 @@ Becomes conceptually:
 [ Generate ] [ Inpaint ]
 ```
 
-- [ ] Preserve Generate behavior.
-- [ ] Both modes use the same loaded model/backend.
-- [ ] Switching tabs does not reload model.
+- [x] Preserve Generate behavior.
+- [x] Both modes use the same loaded model/backend.
+- [x] Switching tabs does not reload model.
 
 ### 3.2 Source section
 
@@ -188,10 +188,10 @@ Audio        song.mp3
 Length       03:42
 ```
 
-- [ ] Browse/open `.osz`.
-- [ ] Select difficulty.
-- [ ] Display useful metadata.
-- [ ] Changing difficulty changes active working `.osu`.
+- [x] Browse/open `.osz`.
+- [x] Select difficulty.
+- [x] Display useful metadata.
+- [x] Changing difficulty changes active working `.osu`.
 
 ### 3.3 Interval selection
 
@@ -204,17 +204,17 @@ End       01:31.200
 
 Support:
 
-- [ ] `MM:SS`
-- [ ] `MM:SS.mmm`
-- [ ] optionally raw seconds
+- [x] `MM:SS`
+- [x] `MM:SS.mmm`
+- [x] optionally raw seconds
 
 Validation:
 
-- [ ] start ≥ 0
-- [ ] end > start
-- [ ] end ≤ sensible map/audio boundary
-- [ ] reject empty intervals
-- [ ] normalize entered timestamps for display
+- [x] start ≥ 0
+- [x] end > start
+- [x] end ≤ sensible map/audio boundary
+- [x] reject empty intervals
+- [x] normalize entered timestamps for display
 
 Do **not** build a fancy timeline yet.
 
@@ -224,21 +224,21 @@ Expose parameters that actually make sense when replacing part of an existing ma
 
 Primary controls:
 
-- [ ] descriptors
-- [ ] target difficulty
-- [ ] mapper/style conditioning where supported
-- [ ] year where supported
-- [ ] seed
-- [ ] timing context
-- [ ] hitsound behavior
+- [x] descriptors
+- [x] target difficulty
+- [x] mapper/style conditioning where supported
+- [x] year where supported
+- [x] seed
+- [x] timing context
+- [x] hitsound behavior
 
 Advanced:
 
-- [ ] temperature
-- [ ] CFG
-- [ ] lookback
-- [ ] lookahead
-- [ ] other meaningful inference controls already provided by Mapperatorinator
+- [x] temperature
+- [x] CFG
+- [x] lookback
+- [x] lookahead
+- [x] other meaningful inference controls already provided by Mapperatorinator
 
 Avoid duplicating values that should naturally come from the existing beatmap.
 
@@ -246,15 +246,15 @@ Avoid duplicating values that should naturally come from the existing beatmap.
 
 Display where useful, but default to reference map values:
 
-- [ ] mode
-- [ ] CS
-- [ ] AR
-- [ ] OD
-- [ ] HP
-- [ ] slider multiplier
-- [ ] audio
-- [ ] metadata
-- [ ] existing timing
+- [x] mode
+- [x] CS
+- [x] AR
+- [x] OD
+- [x] HP
+- [x] slider multiplier
+- [x] audio
+- [x] metadata
+- [x] existing timing
 
 Clearly distinguish:
 
@@ -278,7 +278,7 @@ add_to_beatmap = true
 
 - [x] Do not shell out to another full Mapperatorinator instance if avoidable.
 - [x] Call existing inference components directly/shared through the application's normal backend.
-- [ ] Reuse already-loaded model. *(The workflow accepts the shared runner; GUI-owned server wiring is M3.)*
+- [x] Reuse already-loaded model.
 
 ### 4.2 Safe generation transaction
 
@@ -293,7 +293,7 @@ On success:
 - [x] Validate output parses.
 - [x] Commit new version to working copy.
 - [x] Mark session dirty.
-- [ ] Refresh UI metadata where necessary. *(Session metadata is available; GUI binding is M3.)*
+- [x] Refresh UI metadata where necessary.
 
 On failure:
 

@@ -13,6 +13,7 @@ from .workflow import (
     GenerationValidationError,
     build_inpainting_config,
     regenerate_interval,
+    restore_snapshot,
 )
 
 __all__ = [
@@ -26,5 +27,5 @@ __all__ = [
     "UnsafeArchiveError",
     "build_inpainting_config",
     "regenerate_interval",
+    "restore_snapshot",
 ]
-

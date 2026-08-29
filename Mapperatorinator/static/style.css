@@ -912,3 +912,114 @@ input[type="number"]:hover::-webkit-outer-spin-button {
 .clear-input-btn:active {
     transform: translateY(-50%) scale(0.95);
 }
+
+.mode-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 4px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--card-bg);
+}
+
+.mode-tab {
+    flex: 1;
+    padding: 11px 18px;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.mode-tab.active {
+    color: #fff;
+    border-color: var(--accent-color);
+    background: rgba(255, 59, 63, 0.15);
+}
+
+.mode-panel[hidden] {
+    display: none !important;
+}
+
+.inpaint-heading,
+.inpaint-actions,
+.compact-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.inpaint-heading p,
+.section-hint {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.session-badge {
+    padding: 6px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.session-badge.dirty {
+    color: #fff;
+    border-color: var(--accent-color);
+    background: rgba(255, 59, 63, 0.15);
+}
+
+.inherited-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+    gap: 10px;
+    margin-top: 8px;
+}
+
+.inherited-grid span {
+    display: flex;
+    flex-direction: column;
+    min-height: 58px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--input-bg);
+}
+
+.inherited-grid small {
+    color: var(--text-secondary);
+}
+
+.inherited-grid output {
+    font-weight: 500;
+    overflow-wrap: anywhere;
+}
+
+.wide-group {
+    flex: 2 1 240px;
+}
+
+.advanced-settings {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+
+.advanced-settings summary {
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.advanced-settings[open] summary {
+    margin-bottom: 12px;
+}
+
+.inpaint-actions button {
+    flex: 1 1 200px;
+}

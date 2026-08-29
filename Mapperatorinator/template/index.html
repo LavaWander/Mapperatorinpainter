@@ -15,6 +15,11 @@
     <div id="flash-container"></div>
     <div class="container">
         <main>
+            <nav class="mode-tabs" aria-label="Mapperatorinator mode">
+                <button type="button" class="mode-tab active" data-mode="generate" aria-selected="true">Generate</button>
+                <button type="button" class="mode-tab" data-mode="inpaint" aria-selected="false">Inpaint</button>
+            </nav>
+            <section id="generate-panel" class="mode-panel active">
             <form id="inferenceForm" method="POST" class="card form-card">
 
                 <!-- Paths Section -->
@@ -451,6 +456,149 @@
 
                 <button type="submit" data-i18n="buttons.run_inference">Run Inference</button>
             </form>
+            </section>
+
+            <section id="inpaint-panel" class="mode-panel" hidden>
+                <form id="inpaintForm" method="POST" class="card form-card">
+                    <div class="inpaint-heading">
+                        <div>
+                            <h2>Interactive Inpainting</h2>
+                            <p>Replace one interval in a working copy of an existing beatmapset.</p>
+                        </div>
+                        <span id="inpaint-session-state" class="session-badge">No beatmapset open</span>
+                    </div>
+
+                    <fieldset>
+                        <legend>Source beatmapset</legend>
+                        <div class="path-input-group">
+                            <label for="inpaint_osz_path">Beatmapset:</label>
+                            <div class="input-with-clear">
+                                <input type="text" id="inpaint_osz_path" autocomplete="off" placeholder="Choose an .osz file" />
+                            </div>
+                            <button type="button" class="browse-button" data-browse-type="osz" data-target="inpaint_osz_path">Browse...</button>
+                            <button type="button" id="inpaint-open-button" class="browse-button">Open</button>
+                        </div>
+                        <div class="metadata-row">
+                            <div class="metadata-group wide-group">
+                                <label for="inpaint_difficulty">Difficulty:</label>
+                                <select id="inpaint_difficulty" class="styled-select" disabled>
+                                    <option value="">Open a beatmapset first</option>
+                                </select>
+                            </div>
+                            <div class="metadata-group">
+                                <label>Audio:</label>
+                                <output id="inpaint_audio">—</output>
+                            </div>
+                            <div class="metadata-group">
+                                <label>Length:</label>
+                                <output id="inpaint_length">—</output>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <fieldset id="inpaint-inherited" disabled>
+                        <legend>Inherited from map</legend>
+                        <p class="section-hint">These properties come from the selected working difficulty and are preserved.</p>
+                        <div class="inherited-grid">
+                            <span><small>Title</small><output id="inpaint_title">—</output></span>
+                            <span><small>Artist</small><output id="inpaint_artist">—</output></span>
+                            <span><small>Mode</small><output id="inpaint_mode">—</output></span>
+                            <span><small>Mapper</small><output id="inpaint_mapper">—</output></span>
+                            <span><small>CS</small><output id="inpaint_cs">—</output></span>
+                            <span><small>AR</small><output id="inpaint_ar">—</output></span>
+                            <span><small>OD</small><output id="inpaint_od">—</output></span>
+                            <span><small>HP</small><output id="inpaint_hp">—</output></span>
+                            <span><small>Slider multiplier</small><output id="inpaint_slider_multiplier">—</output></span>
+                            <span><small>Tick rate</small><output id="inpaint_slider_tick_rate">—</output></span>
+                        </div>
+                    </fieldset>
+
+                    <fieldset>
+                        <legend>Regeneration interval</legend>
+                        <p class="section-hint">Enter MM:SS, MM:SS.mmm, or raw seconds.</p>
+                        <div class="metadata-row">
+                            <div class="metadata-group">
+                                <label for="inpaint_start_time">Start:</label>
+                                <input type="text" id="inpaint_start_time" name="start_time" value="00:00.000" required />
+                            </div>
+                            <div class="metadata-group">
+                                <label for="inpaint_end_time">End:</label>
+                                <input type="text" id="inpaint_end_time" name="end_time" value="00:10.000" required />
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <fieldset>
+                        <legend>Generation conditioning</legend>
+                        <p class="section-hint">Blank values inherit from the reference map where Mapperatorinator supports it.</p>
+                        <label for="inpaint_model">Model:</label>
+                        <select id="inpaint_model" name="model" class="styled-select">
+                            <option value="v28">Mapperatorinator V28</option>
+                            <option value="v29">Mapperatorinator V29</option>
+                            <option value="v30">Mapperatorinator V30</option>
+                            <option value="v31">Mapperatorinator V31</option>
+                            <option value="v32-mini">Mapperatorinator V32-mini</option>
+                            <option value="v32" selected>Mapperatorinator V32</option>
+                        </select>
+                        <div class="metadata-row">
+                            <div class="metadata-group wide-group">
+                                <label for="inpaint_descriptors">Descriptors:</label>
+                                <input type="text" id="inpaint_descriptors" name="descriptors" placeholder="stream, intense" />
+                            </div>
+                            <div class="metadata-group wide-group">
+                                <label for="inpaint_negative_descriptors">Avoid descriptors:</label>
+                                <input type="text" id="inpaint_negative_descriptors" name="negative_descriptors" placeholder="simple, low density" />
+                            </div>
+                        </div>
+                        <div class="metadata-row">
+                            <div class="metadata-group">
+                                <label for="inpaint_target_difficulty">Target difficulty:</label>
+                                <input type="number" id="inpaint_target_difficulty" name="difficulty" step="0.1" min="0" placeholder="Inherit" />
+                            </div>
+                            <div class="metadata-group">
+                                <label for="inpaint_mapper_id">Mapper ID:</label>
+                                <input type="number" id="inpaint_mapper_id" name="mapper_id" min="0" placeholder="Inherit" />
+                            </div>
+                            <div class="metadata-group">
+                                <label for="inpaint_year">Year:</label>
+                                <input type="number" id="inpaint_year" name="year" min="2007" max="2024" placeholder="Inherit" />
+                            </div>
+                            <div class="metadata-group">
+                                <label for="inpaint_seed">Seed:</label>
+                                <input type="number" id="inpaint_seed" name="seed" min="0" placeholder="Random" />
+                            </div>
+                        </div>
+                        <div class="metadata-row compact-controls">
+                            <label class="checkbox-label"><input type="checkbox" id="inpaint_timing_context" name="timing_context" checked /> Use existing timing as context</label>
+                            <div class="metadata-group">
+                                <label for="inpaint_hitsounds">Hitsounds:</label>
+                                <select id="inpaint_hitsounds" name="hitsounds" class="styled-select">
+                                    <option value="inherit">Inherit from map</option>
+                                    <option value="yes">Generate hitsounded</option>
+                                    <option value="no">Generate without hitsounds</option>
+                                </select>
+                            </div>
+                        </div>
+                        <details class="advanced-settings">
+                            <summary>Advanced inference controls</summary>
+                            <div class="metadata-row">
+                                <div class="metadata-group"><label for="inpaint_temperature">Temperature:</label><input type="number" id="inpaint_temperature" name="temperature" step="0.01" min="0" value="0.9" /></div>
+                                <div class="metadata-group"><label for="inpaint_cfg_scale">CFG:</label><input type="number" id="inpaint_cfg_scale" name="cfg_scale" step="0.1" min="0" value="1.0" /></div>
+                                <div class="metadata-group"><label for="inpaint_top_p">Top-p:</label><input type="number" id="inpaint_top_p" name="top_p" step="0.01" min="0" max="1" value="0.9" /></div>
+                                <div class="metadata-group"><label for="inpaint_lookback">Lookback:</label><input type="number" id="inpaint_lookback" name="lookback" step="0.05" min="0" max="1" value="0.5" /></div>
+                                <div class="metadata-group"><label for="inpaint_lookahead">Lookahead:</label><input type="number" id="inpaint_lookahead" name="lookahead" step="0.05" min="0" max="1" value="0.4" /></div>
+                            </div>
+                            <label for="inpaint_lora_path">LoRA path (optional):</label>
+                            <input type="text" id="inpaint_lora_path" name="lora_path" />
+                        </details>
+                    </fieldset>
+
+                    <div class="inpaint-actions">
+                        <button type="submit" id="inpaint-generate-button" disabled>Regenerate interval</button>
+                        <button type="button" id="inpaint-export-button" class="browse-button" disabled>Export .osz</button>
+                    </div>
+                </form>
+            </section>
 
             <!-- Progress Output -->
             <div id="progress_output" class="card" style="margin-top:20px; display:none;">
