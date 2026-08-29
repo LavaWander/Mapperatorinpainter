@@ -320,6 +320,24 @@ Document what Mapperatorinator currently does rather than silently inventing beh
 
 If behavior is undesirable, file it as a separate improvement rather than contaminating the initial implementation.
 
+### Known issue — restore slider velocity after the regenerated interval
+
+- [ ] Restore the reference map's effective slider velocity immediately after `end_time` when generated timing changes the SV inside the selected interval.
+
+Current behavior: if inpainting introduces an SV such as `1.5x` near the end of the interval, that value remains active after the interval until the next retained reference greenline. The later greenlines are not deleted; the missing piece is a boundary-state restoration point. The model cannot be expected to emit this reset because it does not receive the entire future map as generation context.
+
+Future acceptance test:
+
+```text
+reference SV before selection: 1.0x
+generated SV at end of selection: 1.5x
+next reference SV change: much later
+
+expected immediately after end_time: restore 1.0x
+```
+
+Implement this as explicit postprocessing boundary reconciliation while preserving all original timing/effect points after the interval.
+
 ## Phase 5 — Iterative workflow
 
 This is where the feature becomes worthwhile.
