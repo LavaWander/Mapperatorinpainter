@@ -1,0 +1,58 @@
+osu file format v14
+
+[General]
+AudioFilename: audio.wav
+AudioLeadIn: 0
+PreviewTime: -1
+Countdown: 0
+SampleSet: Normal
+StackLeniency: 0.7
+Mode: 0
+LetterboxInBreaks: 0
+WidescreenStoryboard: 1
+
+[Editor]
+DistanceSpacing: 1
+BeatDivisor: 4
+GridSize: 4
+TimelineZoom: 1
+
+[Metadata]
+Title:M1 Partial Remap Fixture
+TitleUnicode:M1 Partial Remap Fixture
+Artist:Mapperatorinator Tests
+ArtistUnicode:Mapperatorinator Tests
+Creator:Mapperatorinator-Extended
+Version:Generated
+Source:
+Tags:m1 partial remap fixture generated
+BeatmapID:0
+BeatmapSetID:-1
+
+[Difficulty]
+HPDrainRate:5
+CircleSize:4
+OverallDifficulty:8
+ApproachRate:9
+SliderMultiplier:1.4
+SliderTickRate:1
+
+[Events]
+
+[TimingPoints]
+0,500,4,2,1,100,1,0
+1500,-100,4,2,1,40,0,0
+2000,-80,4,2,1,65,0,0
+2200,-75,4,2,1,75,0,1
+3200,375,3,2,1,85,1,0
+3900,-125,4,2,1,95,0,0
+4500,-100,4,2,1,55,0,0
+
+[HitObjects]
+16,16,1500,1,0,0:0:0:0:
+320,64,2000,1,2,2:0:0:70:
+352,96,2500,1,0,0:0:0:0:
+384,128,3000,2,0,B|448:128|480:160,1,500,0|0,0:0|0:0,0:0:0:0:
+416,192,4000,1,8,2:0:0:80:
+496,368,4500,1,0,0:0:0:0:
+

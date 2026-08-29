@@ -31,14 +31,14 @@
 
 ### 1.1 Trace existing full generation
 
-- [ ] Identify GUI entry point.
-- [ ] Identify model initialization/loading.
-- [ ] Identify how GUI parameters become inference configuration.
-- [ ] Identify inference entry point.
-- [ ] Identify preprocessing pipeline.
-- [ ] Identify postprocessing pipeline.
-- [ ] Identify output `.osu` creation.
-- [ ] Identify existing `.osz` export functionality.
+- [x] Identify GUI entry point.
+- [x] Identify model initialization/loading.
+- [x] Identify how GUI parameters become inference configuration.
+- [x] Identify inference entry point.
+- [x] Identify preprocessing pipeline.
+- [x] Identify postprocessing pipeline.
+- [x] Identify output `.osu` creation.
+- [x] Identify existing `.osz` export functionality.
 
 **Deliverable:** short internal developer note showing:
 
@@ -58,33 +58,33 @@ postprocessor
 
 Find exactly how existing parameters are handled:
 
-- [ ] `beatmap_path`
-- [ ] `start_time`
-- [ ] `end_time`
-- [ ] `add_to_beatmap`
-- [ ] `overwrite_reference_beatmap`
-- [ ] context options
-- [ ] descriptors
-- [ ] difficulty
-- [ ] mapper/style conditioning
-- [ ] seed
-- [ ] temperature
-- [ ] CFG
-- [ ] timing context
-- [ ] hitsound-related options
+- [x] `beatmap_path`
+- [x] `start_time`
+- [x] `end_time`
+- [x] `add_to_beatmap`
+- [x] `overwrite_reference_beatmap`
+- [x] context options
+- [x] descriptors
+- [x] difficulty
+- [x] mapper/style conditioning
+- [x] seed
+- [x] temperature
+- [x] CFG
+- [x] timing context
+- [x] hitsound-related options
 
 Determine:
 
-- [ ] Which parameters are required.
-- [ ] Which can be derived from the reference `.osu`.
-- [ ] Which should be exposed in Inpaint.
-- [ ] Which should normally remain inherited/hidden.
-- [ ] Exactly how objects inside the requested interval are replaced.
-- [ ] What happens to objects crossing an interval boundary.
-- [ ] What happens to timing points/effect points.
-- [ ] Whether the original reference file is mutated.
+- [x] Which parameters are required.
+- [x] Which can be derived from the reference `.osu`.
+- [x] Which should be exposed in Inpaint.
+- [x] Which should normally remain inherited/hidden.
+- [x] Exactly how objects inside the requested interval are replaced.
+- [x] What happens to objects crossing an interval boundary.
+- [x] What happens to timing points/effect points.
+- [x] Whether the original reference file is mutated.
 
-**Acceptance criterion:** manually invoke existing partial generation without the new GUI and successfully replace a known interval.
+**Acceptance criterion:** manually invoke existing partial generation without the new GUI and successfully replace a known interval. **Verified 2026-08-29; see `M1_INFERENCE_PROOF.md`.**
 
 ## Phase 2 — Session / `.osz` handling
 
@@ -651,6 +651,8 @@ Treat these as hard stopping points rather than trying to implement the entire b
 
 **M1 — Prove inference:** Existing `.osu` → specify interval → Mapperatorinator replaces interval correctly.
 
+**Status:** Complete (2026-08-29). See `M1_INFERENCE_PROOF.md`.
+
 **M2 — Prove `.osz` workflow:** Open `.osz` → extract → choose difficulty → regenerate → export valid modified `.osz`.
 
 **M3 — Usable Inpaint tab:** All important conditioning controls exposed, model shared with Generate, repeated regeneration works.
@@ -664,4 +666,3 @@ Treat these as hard stopping points rather than trying to implement the entire b
 **M7 — Unified workflow:** Generate → Open in Inpaint → iterate → Export.
 
 The **M2/M3 boundary is an intentional stopping point for real-world use and feedback**. Do not proceed directly into timeline and Danser work before learning from the basic inpainting workflow.
-
