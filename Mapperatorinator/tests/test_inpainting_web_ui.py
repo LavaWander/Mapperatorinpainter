@@ -88,6 +88,7 @@ class InpaintWebUiTests(unittest.TestCase):
             "seed": "32",
             "timing_context": "on",
             "hitsounds": "inherit",
+            "descriptors": ["skillset/streams", "streams/stamina"],
         }
         ensured_configs = []
         with patch.object(self.web_ui, "_ensure_inference_server", side_effect=ensured_configs.append), \
@@ -108,6 +109,7 @@ class InpaintWebUiTests(unittest.TestCase):
         self.assertTrue(self.web_ui._get_inpaint_session(session_id).dirty)
         self.assertEqual(2, len(ensured_configs))
         self.assertTrue(all(config.use_server for config in ensured_configs))
+        self.assertTrue(all(config.descriptors == ["skillset/streams", "streams/stamina"] for config in ensured_configs))
         self.assertEqual(32, second.get_json()["seed"])
 
     def test_session_mutations_require_csrf(self) -> None:

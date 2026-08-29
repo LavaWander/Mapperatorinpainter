@@ -428,7 +428,7 @@
                 </fieldset>
 
                 <!-- Descriptors -->
-                <div class="custom-dropdown-descriptors conditional-field" data-hide-for-model="v30">
+                <div class="custom-dropdown-descriptors conditional-field" data-descriptor-scope="generate" data-hide-for-model="v30">
                     <button type="button" class="dropdown-header">
                         <span class="dropdown-title" data-i18n="sections.descriptors"
                             data-i18n-title="tooltips.descriptors"
@@ -540,14 +540,13 @@
                             <option value="v32-mini">Mapperatorinator V32-mini</option>
                             <option value="v32" selected>Mapperatorinator V32</option>
                         </select>
-                        <div class="metadata-row">
-                            <div class="metadata-group wide-group">
-                                <label for="inpaint_descriptors">Descriptors:</label>
-                                <input type="text" id="inpaint_descriptors" name="descriptors" placeholder="stream, intense" />
-                            </div>
-                            <div class="metadata-group wide-group">
-                                <label for="inpaint_negative_descriptors">Avoid descriptors:</label>
-                                <input type="text" id="inpaint_negative_descriptors" name="negative_descriptors" placeholder="simple, low density" />
+                        <div class="custom-dropdown-descriptors" data-descriptor-scope="inpaint">
+                            <button type="button" class="dropdown-header">
+                                <span class="dropdown-title" title="1 click = include, 2 clicks = exclude, 3 clicks = clear">Descriptors</span>
+                                <span class="dropdown-arrow">&#9660;</span>
+                            </button>
+                            <div class="dropdown-content" inert>
+                                <div class="descriptors-container"></div>
                             </div>
                         </div>
                         <div class="metadata-row">

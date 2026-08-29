@@ -84,7 +84,29 @@ class PartialBeatmapMergeTests(unittest.TestCase):
         self.assertNotIn(3000, offsets)
         self.assertNotIn(3500, offsets)
 
+    def test_timing_points_after_an_early_interval_keep_all_reference_effects(self) -> None:
+        self.postprocessor.start_time = 0
+        self.postprocessor.end_time = 1_000
+        reference = Beatmap.from_path(self.reference_path)
+
+        def signature(timing_point):
+            return (
+                milliseconds(timing_point.offset),
+                timing_point.ms_per_beat,
+                timing_point.meter,
+                timing_point.sample_type,
+                timing_point.sample_set,
+                timing_point.volume,
+                timing_point.parent is None,
+                timing_point.kiai_mode,
+            )
+
+        expected = [signature(tp) for tp in reference.timing_points if milliseconds(tp.offset) > 1_000]
+        merged = Beatmap.parse(self.postprocessor.add_to_beatmap(self.generated_text, str(self.reference_path)))
+        actual = [signature(tp) for tp in merged.timing_points if milliseconds(tp.offset) > 1_000]
+
+        self.assertEqual(expected, actual)
+
 
 if __name__ == "__main__":
     unittest.main()
-

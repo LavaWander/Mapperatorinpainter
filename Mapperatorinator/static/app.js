@@ -524,7 +524,10 @@ $(document).ready(function() {
     // Descriptor Manager
     const DescriptorManager = {
         descriptorSets: {},
-        selectionStates: new Map(),
+        selectionStates: {
+            generate: new Map(),
+            inpaint: new Map(),
+        },
 
         init() {
             this.descriptorSets = window.APP_BOOTSTRAP?.descriptorSets || {};
@@ -532,16 +535,16 @@ $(document).ready(function() {
             this.attachDropdownHandler();
             this.attachDescriptorClickHandlers();
 
-            window.addEventListener('languageChanged', () => this.renderCurrentDescriptors());
+            window.addEventListener('languageChanged', () => this.renderAllDescriptors());
         },
 
-        buildDescriptorInputId(setName, value) {
+        buildDescriptorInputId(scope, setName, value) {
             const slug = value
                 .toString()
                 .trim()
                 .toLowerCase()
                 .replace(/[^a-z0-9]+/g, '-');
-            return `desc-${setName}-${slug}`;
+            return `desc-${scope}-${setName}-${slug}`;
         },
 
         formatGroupTitle(title = '') {
@@ -553,21 +556,23 @@ $(document).ready(function() {
                 .join(' ');
         },
 
-        getActiveDescriptorSetName() {
-            const selectedModel = $('#model').val();
+        getActiveDescriptorSetName(scope = 'generate') {
+            const selectedModel = $(scope === 'inpaint' ? '#inpaint_model' : '#model').val();
             const capabilities = AppState.modelCapabilities[selectedModel] || {};
             return Object.prototype.hasOwnProperty.call(capabilities, 'descriptorSet')
                 ? capabilities.descriptorSet
                 : 'omdb';
         },
 
-        getActiveDescriptorGroups() {
-            const descriptorSetName = this.getActiveDescriptorSetName();
+        getActiveDescriptorGroups(scope = 'generate') {
+            const descriptorSetName = this.getActiveDescriptorSetName(scope);
             if (!descriptorSetName) {
                 return [];
             }
 
-            const selectedGamemode = $('#gamemode').val();
+            const selectedGamemode = scope === 'inpaint'
+                ? String(InpaintManager.session?.active_difficulty?.mode ?? 0)
+                : $('#gamemode').val();
             const descriptorSet = this.descriptorSets[descriptorSetName];
             const groups = descriptorSet?.groups || [];
 
@@ -579,10 +584,15 @@ $(document).ready(function() {
                 .filter((group) => group.items.length > 0);
         },
 
-        renderCurrentDescriptors() {
-            const $dropdown = $('.custom-dropdown-descriptors');
+        renderAllDescriptors() {
+            this.renderCurrentDescriptors('generate');
+            this.renderCurrentDescriptors('inpaint');
+        },
+
+        renderCurrentDescriptors(scope = 'generate') {
+            const $dropdown = $(`.custom-dropdown-descriptors[data-descriptor-scope="${scope}"]`);
             const $container = $dropdown.find('.descriptors-container');
-            const descriptorSetName = this.getActiveDescriptorSetName();
+            const descriptorSetName = this.getActiveDescriptorSetName(scope);
 
             if (!descriptorSetName) {
                 $container.empty();
@@ -594,7 +604,7 @@ $(document).ready(function() {
                 return;
             }
 
-            const groups = this.getActiveDescriptorGroups();
+            const groups = this.getActiveDescriptorGroups(scope);
             $container.empty();
 
             groups.forEach((group) => {
@@ -609,7 +619,7 @@ $(document).ready(function() {
                 $group.append($heading);
 
                 (group.items || []).forEach((item) => {
-                    const inputId = this.buildDescriptorInputId(descriptorSetName, item.value);
+                    const inputId = this.buildDescriptorInputId(scope, descriptorSetName, item.value);
                     const translationBase = item.translationKey
                         ? `descriptors.${descriptorSetName}.items.${item.translationKey}`
                         : null;
@@ -650,13 +660,14 @@ $(document).ready(function() {
                 I18n.applyTranslations();
             }
 
-            this.syncRenderedSelections();
+            this.syncRenderedSelections(scope);
         },
 
-        syncRenderedSelections() {
-            $('.descriptors-container input[name="descriptors"]').each((_, element) => {
+        syncRenderedSelections(scope = 'generate') {
+            const states = this.selectionStates[scope];
+            $(`.custom-dropdown-descriptors[data-descriptor-scope="${scope}"] input[name="descriptors"]`).each((_, element) => {
                 const $checkbox = $(element);
-                const state = this.selectionStates.get($checkbox.val()) || 'neutral';
+                const state = states.get($checkbox.val()) || 'neutral';
                 this.applyCheckboxState($checkbox, state);
             });
         },
@@ -683,7 +694,7 @@ $(document).ready(function() {
                 }
 
                 if ($dropdown.hasClass('open')) {
-                    Utils.smoothScroll('.custom-dropdown-descriptors');
+                    Utils.smoothScroll($dropdown);
                     dropdownContent.removeAttribute('inert');
                 } else {
                     dropdownContent.setAttribute('inert', '');
@@ -691,27 +702,28 @@ $(document).ready(function() {
             });
         },
 
-        setDescriptorState($checkbox, state) {
+        setDescriptorState(scope, $checkbox, state) {
             const value = $checkbox.val();
+            const states = this.selectionStates[scope];
 
             if (state === 'positive' || state === 'negative') {
-                this.selectionStates.set(value, state);
+                states.set(value, state);
             } else {
-                this.selectionStates.delete(value);
+                states.delete(value);
             }
 
             this.applyCheckboxState($checkbox, state);
         },
 
-        clearSelections() {
-            this.selectionStates.clear();
-            this.syncRenderedSelections();
+        clearSelections(scope = 'generate') {
+            this.selectionStates[scope].clear();
+            this.syncRenderedSelections(scope);
         },
 
-        getSelections() {
+        getSelections(scope = 'generate') {
             const selections = { positive: [], negative: [] };
 
-            $('input[name="descriptors"]').each(function() {
+            $(`.custom-dropdown-descriptors[data-descriptor-scope="${scope}"] input[name="descriptors"]`).each(function() {
                 const $checkbox = $(this);
                 if ($checkbox.hasClass('positive-check')) {
                     selections.positive.push($checkbox.val());
@@ -723,32 +735,34 @@ $(document).ready(function() {
             return selections;
         },
 
-        applySelections(descriptors = {}) {
-            this.selectionStates.clear();
+        applySelections(descriptors = {}, scope = 'generate') {
+            const states = this.selectionStates[scope];
+            states.clear();
             (descriptors.positive || []).forEach((value) => {
-                this.selectionStates.set(value, 'positive');
+                states.set(value, 'positive');
             });
 
             (descriptors.negative || []).forEach((value) => {
-                this.selectionStates.set(value, 'negative');
+                states.set(value, 'negative');
             });
 
-            this.syncRenderedSelections();
+            this.syncRenderedSelections(scope);
         },
 
         attachDescriptorClickHandlers() {
             $('.descriptors-container').on('click', 'input[name="descriptors"]', function(e) {
                 e.preventDefault();
                 const $checkbox = $(this);
+                const scope = $checkbox.closest('.custom-dropdown-descriptors').data('descriptor-scope') || 'generate';
 
                 if (!$checkbox.prop('disabled')) {
                     if ($checkbox.hasClass('positive-check')) {
-                        DescriptorManager.setDescriptorState($checkbox, 'negative');
+                        DescriptorManager.setDescriptorState(scope, $checkbox, 'negative');
                     } else if ($checkbox.hasClass('negative-check')) {
-                        DescriptorManager.setDescriptorState($checkbox, 'neutral');
+                        DescriptorManager.setDescriptorState(scope, $checkbox, 'neutral');
                         return;
                     } else {
-                        DescriptorManager.setDescriptorState($checkbox, 'positive');
+                        DescriptorManager.setDescriptorState(scope, $checkbox, 'positive');
                     }
                 }
             });
@@ -1602,7 +1616,8 @@ $(document).ready(function() {
             const model = $('#inpaint_model').val();
             const capabilities = AppState.modelCapabilities[model] || {};
             const descriptorsSupported = capabilities.supportsDescriptors !== false;
-            $('#inpaint_descriptors, #inpaint_negative_descriptors').prop('disabled', !descriptorsSupported);
+            $('.custom-dropdown-descriptors[data-descriptor-scope="inpaint"]')
+                .toggle(descriptorsSupported);
 
             const yearSupported = capabilities.supportsYear !== false;
             $('#inpaint_year').prop('disabled', !yearSupported)
@@ -1611,6 +1626,7 @@ $(document).ready(function() {
             const forceHitsounds = capabilities.hideHitsoundsOption === true;
             $('#inpaint_hitsounds').prop('disabled', forceHitsounds);
             if (forceHitsounds) $('#inpaint_hitsounds').val('yes');
+            DescriptorManager.renderCurrentDescriptors('inpaint');
         },
 
         setBusy(busy) {
@@ -1670,6 +1686,7 @@ $(document).ready(function() {
             $('#inpaint_slider_tick_rate').text(session.metadata.slider_tick_rate);
             $('#inpaint-session-state').text(session.dirty ? 'Working copy modified' : 'Working copy ready')
                 .toggleClass('dirty', Boolean(session.dirty));
+            DescriptorManager.renderCurrentDescriptors('inpaint');
 
             const defaultEnd = Math.min(active.length_ms || 10000, 10000);
             if (!$('#inpaint_end_time').data('user-edited')) {
@@ -1711,6 +1728,11 @@ $(document).ready(function() {
             InferenceManager.removeFinishedCards();
             const formData = new FormData($('#inpaintForm')[0]);
             formData.set('session_id', this.session.session_id);
+            formData.delete('descriptors');
+            formData.delete('negative_descriptors');
+            const descriptorSelections = DescriptorManager.getSelections('inpaint');
+            descriptorSelections.positive.forEach((value) => formData.append('descriptors', value));
+            descriptorSelections.negative.forEach((value) => formData.append('negative_descriptors', value));
             if ($('#inpaint_model').val() === 'v30') formData.set('hitsounds', 'yes');
             const job = InferenceManager.createJobCard(`Inpaint · ${this.session.active_difficulty.version}`);
             job.onStartError = () => this.setBusy(false);
