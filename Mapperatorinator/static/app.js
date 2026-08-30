@@ -1608,7 +1608,16 @@ $(document).ready(function() {
             $('#inpaint_difficulty').on('change', () => this.selectDifficulty());
             $('#inpaintForm').on('submit', (event) => this.regenerate(event));
             $('#inpaint-export-button').on('click', () => this.exportBeatmapset());
+            $('#inpaint-close-button').on('click', () => this.close());
+            $('#inpaint-undo-button').on('click', () => this.changeRevision('undo'));
+            $('#inpaint-redo-button').on('click', () => this.changeRevision('redo'));
+            $('#inpaint-random-seed').on('click', () => this.randomizeSeed());
             $('#inpaint_model').on('change', () => this.updateModelControls());
+            window.addEventListener('beforeunload', (event) => {
+                if (!this.session?.dirty) return;
+                event.preventDefault();
+                event.returnValue = '';
+            });
             this.updateModelControls();
         },
 
@@ -1636,6 +1645,11 @@ $(document).ready(function() {
             $('#inpaint-open-button').prop('disabled', busy);
             $('#inpaint_difficulty').prop('disabled', busy || !this.session);
             $('#inpaint-export-button').prop('disabled', busy || !this.session);
+            $('#inpaint-close-button').prop('disabled', busy || !this.session);
+            const revisions = this.session?.revisions;
+            $('#inpaint-undo-button').prop('disabled', busy || !revisions?.can_undo);
+            $('#inpaint-redo-button').prop('disabled', busy || !revisions?.can_redo);
+            $('#inpaint-random-seed').prop('disabled', busy);
         },
 
         request(url, data) {
@@ -1647,6 +1661,10 @@ $(document).ready(function() {
             if (!path.toLowerCase().endsWith('.osz')) {
                 Utils.showFlashMessage('Choose a valid .osz beatmapset.', 'error');
                 return;
+            }
+            if (this.session) {
+                if (!(await this.finishSession())) return;
+                this.clearSession();
             }
             this.setBusy(true);
             try {
@@ -1687,6 +1705,7 @@ $(document).ready(function() {
             $('#inpaint-session-state').text(session.dirty ? 'Working copy modified' : 'Working copy ready')
                 .toggleClass('dirty', Boolean(session.dirty));
             DescriptorManager.renderCurrentDescriptors('inpaint');
+            this.renderRevisions();
 
             const defaultEnd = Math.min(active.length_ms || 10000, 10000);
             if (!$('#inpaint_end_time').data('user-edited')) {
@@ -1696,6 +1715,69 @@ $(document).ready(function() {
                 $(this).data('user-edited', true);
             });
             this.setBusy(false);
+        },
+
+        renderRevisions() {
+            const revisions = this.session?.revisions;
+            const $history = $('#inpaint-revision-history').empty();
+            $('#inpaint-revision-panel').prop('disabled', !revisions);
+            if (!revisions) {
+                $('#inpaint-current-revision').text('No revision');
+                $('<li>').text('No beatmapset open').appendTo($history);
+                return;
+            }
+
+            const current = revisions.items.find((revision) => revision.current);
+            const currentKind = current?.metadata?.kind === 'original' ? 'Original' : 'Generation';
+            $('#inpaint-current-revision').text(`Revision ${revisions.current_revision} · ${currentKind}`);
+            revisions.items.slice().reverse().forEach((revision) => {
+                const metadata = revision.metadata || {};
+                let text = `Revision ${revision.revision}`;
+                if (metadata.kind === 'original') {
+                    text += ' — Original';
+                } else {
+                    const range = metadata.start_time == null
+                        ? ''
+                        : `${this.formatTimestamp(metadata.start_time)}–${this.formatTimestamp(metadata.end_time)}`;
+                    text += ` — ${range || 'Modified'}`;
+                    if (metadata.seed != null) text += ` · seed ${metadata.seed}`;
+                    if (metadata.difficulty != null) text += ` · ${Number(metadata.difficulty).toFixed(1)}★`;
+                    if (metadata.descriptors?.length) text += ` · ${metadata.descriptors.join(', ')}`;
+                }
+                $('<li>').text(text).toggleClass('current', Boolean(revision.current)).appendTo($history);
+            });
+        },
+
+        randomizeSeed() {
+            if (window.crypto?.getRandomValues) {
+                const randomValue = new Uint32Array(1);
+                window.crypto.getRandomValues(randomValue);
+                $('#inpaint_seed').val(randomValue[0] % 65537);
+            } else {
+                $('#inpaint_seed').val(Math.floor(Math.random() * 65537));
+            }
+        },
+
+        async refreshSession() {
+            if (!this.session) return;
+            const response = await this.request('/inpaint/state', { session_id: this.session.session_id });
+            this.renderSession(response.session);
+        },
+
+        async changeRevision(direction) {
+            if (!this.session || this.busy) return;
+            this.setBusy(true);
+            try {
+                const response = await this.request(`/inpaint/${direction}`, {
+                    session_id: this.session.session_id
+                });
+                this.renderSession(response.session);
+                Utils.showFlashMessage(`${direction === 'undo' ? 'Undid' : 'Redid'} revision.`);
+            } catch (error) {
+                Utils.showFlashMessage(error.responseJSON?.message || `Could not ${direction}.`, 'error');
+            } finally {
+                this.setBusy(false);
+            }
         },
 
         formatTimestamp(milliseconds) {
@@ -1736,13 +1818,16 @@ $(document).ready(function() {
             if ($('#inpaint_model').val() === 'v30') formData.set('hitsounds', 'yes');
             const job = InferenceManager.createJobCard(`Inpaint · ${this.session.active_difficulty.version}`);
             job.onStartError = () => this.setBusy(false);
-            job.onComplete = (success) => {
-                this.setBusy(false);
+            job.onComplete = async (success) => {
                 if (success) {
-                    this.session.dirty = true;
-                    $('#inpaint-session-state').text('Working copy modified').addClass('dirty');
-                    Utils.showFlashMessage('Interval regenerated in the working copy.');
+                    try {
+                        await this.refreshSession();
+                        Utils.showFlashMessage('Interval regenerated in the working copy.');
+                    } catch (error) {
+                        Utils.showFlashMessage(error.responseJSON?.message || 'Could not refresh revision history.', 'error');
+                    }
                 }
+                this.setBusy(false);
             };
             InferenceManager.startInference(job, formData, '/inpaint/start', (response) => {
                 $('#inpaint_seed').val(response.seed);
@@ -1752,7 +1837,7 @@ $(document).ready(function() {
         },
 
         async exportBeatmapset() {
-            if (!this.session || this.busy) return;
+            if (!this.session || this.busy) return false;
             const sourceStem = this.session.source_name.replace(/\.osz$/i, '');
             let destination = null;
             if (window.pywebview?.api?.save_file) {
@@ -1760,17 +1845,57 @@ $(document).ready(function() {
             } else {
                 destination = window.prompt('Export destination (.osz):', `${sourceStem}-inpainted.osz`);
             }
-            if (!destination) return;
+            if (!destination) return false;
             if (!destination.toLowerCase().endsWith('.osz')) destination += '.osz';
             try {
                 const response = await this.request('/inpaint/export', {
                     session_id: this.session.session_id,
                     destination
                 });
+                this.renderSession(response.session);
                 Utils.showFlashMessage(`Exported ${response.path}.`);
+                return true;
             } catch (error) {
                 Utils.showFlashMessage(error.responseJSON?.message || 'Could not export beatmapset.', 'error');
+                return false;
             }
+        },
+
+        async finishSession() {
+            if (!this.session || this.busy) return !this.busy;
+            let discard = false;
+            if (this.session.dirty) {
+                if (window.confirm('This map has unsaved generations. Save before closing it?')) {
+                    if (!(await this.exportBeatmapset())) return false;
+                } else {
+                    if (!window.confirm('Discard the unsaved generations? Choose Cancel to keep editing.')) return false;
+                    discard = true;
+                }
+            }
+
+            try {
+                await this.request('/inpaint/close', {
+                    session_id: this.session.session_id,
+                    discard: discard ? 'true' : 'false'
+                });
+                return true;
+            } catch (error) {
+                Utils.showFlashMessage(error.responseJSON?.message || 'Could not close beatmapset.', 'error');
+                return false;
+            }
+        },
+
+        clearSession() {
+            this.session = null;
+            $('#inpaint_difficulty').empty().append($('<option>').text('Open a beatmapset first')).prop('disabled', true);
+            $('#inpaint_audio, #inpaint_length, #inpaint_title, #inpaint_artist, #inpaint_mode, #inpaint_mapper, #inpaint_cs, #inpaint_ar, #inpaint_od, #inpaint_hp, #inpaint_slider_multiplier, #inpaint_slider_tick_rate').text('—');
+            $('#inpaint-session-state').text('No beatmapset open').removeClass('dirty');
+            this.renderRevisions();
+            this.setBusy(false);
+        },
+
+        async close() {
+            if (await this.finishSession()) this.clearSession();
         }
     };
 

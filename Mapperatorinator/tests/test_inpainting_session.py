@@ -157,7 +157,13 @@ class BeatmapsetSessionTests(unittest.TestCase):
                     encoding="utf-8-sig",
                 )
                 session.mark_dirty()
+                self.assertTrue(session.dirty)
                 self.assertEqual(exported, session.export(exported))
+                self.assertFalse(session.dirty)
+                session.undo()
+                self.assertTrue(session.dirty)
+                session.redo()
+                self.assertFalse(session.dirty)
                 self.assertTrue(session.source_is_unchanged())
 
                 with self.assertRaisesRegex(ExportError, "already exists"):
@@ -179,6 +185,45 @@ class BeatmapsetSessionTests(unittest.TestCase):
                 self.assertEqual(2, len(reopened.difficulties))
                 self.assertEqual("Expert Modified", reopened.select_difficulty("Expert.osu").version)
                 self.assertTrue(reopened.resolve_audio().is_file())
+
+    def test_revision_history_undo_redo_and_branching_only_version_osu_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "source.osz"
+            write_archive(source, normal_entries())
+
+            with BeatmapsetSession.open(source, temp_root=root / "sessions") as session:
+                path = session.active_difficulty.path
+                original = path.read_bytes()
+                first = original.replace(b"Version:Expert", b"Version:First ")
+                second = original.replace(b"Version:Expert", b"Version:Second")
+
+                path.write_bytes(first)
+                revision_one = session.record_revision(metadata={"kind": "generation", "seed": 11})
+                path.write_bytes(second)
+                revision_two = session.record_revision(metadata={"kind": "generation", "seed": 22})
+
+                self.assertTrue(session.dirty)
+                self.assertEqual(revision_two.revision, session.revision_payload()["current_revision"])
+                self.assertEqual(first, session.undo().content)
+                self.assertEqual(first, path.read_bytes())
+                self.assertTrue(session.revision_payload()["can_redo"])
+                self.assertEqual(second, session.redo().content)
+                self.assertEqual(second, path.read_bytes())
+
+                session.undo()
+                branched = original.replace(b"Version:Expert", b"Version:Branch")
+                path.write_bytes(branched)
+                branch_revision = session.record_revision(metadata={"kind": "generation", "seed": 33})
+                state = session.revision_payload()
+                self.assertEqual(branch_revision.revision, state["current_revision"])
+                self.assertFalse(state["can_redo"])
+                self.assertNotIn(revision_two.revision, [item["revision"] for item in state["items"]])
+
+                session.undo()
+                session.undo()
+                self.assertEqual(original, path.read_bytes())
+                self.assertFalse(session.dirty)
 
 
 class ArchiveSafetyTests(unittest.TestCase):
@@ -269,6 +314,12 @@ class InpaintingWorkflowTests(unittest.TestCase):
 
                 self.assertEqual("generated", regenerate_interval(session, config, successful_runner))
                 self.assertTrue(session.dirty)
+                revision = session.revision_payload()["items"][-1]
+                self.assertEqual(12345, revision["metadata"]["seed"])
+                self.assertEqual((2_000, 4_000), (
+                    revision["metadata"]["start_time"],
+                    revision["metadata"]["end_time"],
+                ))
                 beatmap = Beatmap.from_path(session.active_difficulty.path)
                 times = [round(hit_object.time.total_seconds() * 1_000) for hit_object in beatmap.hit_objects(stacking=False)]
                 self.assertIn(2_500, times)

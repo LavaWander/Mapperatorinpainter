@@ -8,9 +8,9 @@ import tempfile
 import uuid
 import zipfile
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Collection, Iterator, Optional
+from typing import Any, Collection, Iterator, Mapping, Optional
 
 from slider import Beatmap
 
@@ -63,6 +63,24 @@ class BeatmapDifficulty:
     supported: bool
 
 
+@dataclass(frozen=True)
+class BeatmapRevision:
+    """One session-local `.osu` snapshot and its generation settings."""
+
+    revision: int
+    content: bytes
+    created_at: str
+    metadata: dict[str, Any]
+
+    def payload(self, *, current: bool) -> dict[str, Any]:
+        return {
+            "revision": self.revision,
+            "created_at": self.created_at,
+            "metadata": dict(self.metadata),
+            "current": current,
+        }
+
+
 class BeatmapsetSession:
     """Owns one extracted, mutable working copy of an immutable `.osz`."""
 
@@ -84,7 +102,20 @@ class BeatmapsetSession:
             (difficulty for difficulty in difficulties if difficulty.supported),
             difficulties[0],
         )
-        self.dirty = False
+        self._revision_counter = 0
+        self._revisions: dict[str, list[BeatmapRevision]] = {}
+        self._revision_cursors: dict[str, int] = {}
+        self._saved_revisions: dict[str, int] = {}
+        for difficulty in difficulties:
+            original = BeatmapRevision(
+                revision=0,
+                content=difficulty.path.read_bytes(),
+                created_at=datetime.now(timezone.utc).isoformat(),
+                metadata={"kind": "original"},
+            )
+            self._revisions[difficulty.relative_path] = [original]
+            self._revision_cursors[difficulty.relative_path] = 0
+            self._saved_revisions[difficulty.relative_path] = original.revision
         self._closed = False
 
     @classmethod
@@ -280,9 +311,119 @@ class BeatmapsetSession:
         beatmap = Beatmap.from_path(self.active_difficulty.path)
         return self._resolve_asset(beatmap.background, required=False, label="background")
 
-    def mark_dirty(self) -> None:
+    @property
+    def dirty(self) -> bool:
+        """Whether any difficulty differs from the last exported/session-open state."""
         self._ensure_open()
-        self.dirty = True
+        return any(
+            revisions[self._revision_cursors[relative_path]].revision
+            != self._saved_revisions[relative_path]
+            for relative_path, revisions in self._revisions.items()
+        )
+
+    def _difficulty_relative_path(self, path: str | Path | None = None) -> str:
+        if path is None:
+            return self.active_difficulty.relative_path
+        resolved = Path(path).resolve()
+        try:
+            relative_path = resolved.relative_to(self.working_directory).as_posix()
+        except ValueError as exc:
+            raise ValueError(f"Revision path is outside the session: {resolved}") from exc
+        if relative_path not in self._revisions:
+            raise ValueError(f"Revision path is not a discovered difficulty: {relative_path}")
+        return relative_path
+
+    @staticmethod
+    def _restore_revision(path: Path, content: bytes) -> None:
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f".{path.name}.",
+                suffix=".revision",
+                dir=path.parent,
+                delete=False,
+            ) as temporary_file:
+                temporary_file.write(content)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+                temporary_path = Path(temporary_file.name)
+            os.replace(temporary_path, path)
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+
+    def record_revision(
+        self,
+        *,
+        path: str | Path | None = None,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> BeatmapRevision:
+        """Commit the current `.osu` as a new revision and discard any redo branch."""
+        self._ensure_open()
+        relative_path = self._difficulty_relative_path(path)
+        difficulty_path = self.working_directory / Path(relative_path)
+        Beatmap.from_path(difficulty_path)
+
+        cursor = self._revision_cursors[relative_path]
+        revisions = self._revisions[relative_path][:cursor + 1]
+        self._revision_counter += 1
+        revision = BeatmapRevision(
+            revision=self._revision_counter,
+            content=difficulty_path.read_bytes(),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            metadata=dict(metadata or {"kind": "modified"}),
+        )
+        revisions.append(revision)
+        self._revisions[relative_path] = revisions
+        self._revision_cursors[relative_path] = len(revisions) - 1
+        return revision
+
+    def mark_dirty(self) -> None:
+        """Compatibility helper for callers that modify a working `.osu` directly."""
+        self.record_revision()
+
+    def undo(self) -> BeatmapRevision:
+        self._ensure_open()
+        relative_path = self.active_difficulty.relative_path
+        cursor = self._revision_cursors[relative_path]
+        if cursor == 0:
+            raise ValueError("There is no earlier revision to undo to.")
+        cursor -= 1
+        revision = self._revisions[relative_path][cursor]
+        self._restore_revision(self.active_difficulty.path, revision.content)
+        self._revision_cursors[relative_path] = cursor
+        return revision
+
+    def redo(self) -> BeatmapRevision:
+        self._ensure_open()
+        relative_path = self.active_difficulty.relative_path
+        cursor = self._revision_cursors[relative_path]
+        revisions = self._revisions[relative_path]
+        if cursor >= len(revisions) - 1:
+            raise ValueError("There is no later revision to redo.")
+        cursor += 1
+        revision = revisions[cursor]
+        self._restore_revision(self.active_difficulty.path, revision.content)
+        self._revision_cursors[relative_path] = cursor
+        return revision
+
+    def revision_payload(self) -> dict[str, Any]:
+        self._ensure_open()
+        relative_path = self.active_difficulty.relative_path
+        revisions = self._revisions[relative_path]
+        cursor = self._revision_cursors[relative_path]
+        return {
+            "current_revision": revisions[cursor].revision,
+            "can_undo": cursor > 0,
+            "can_redo": cursor < len(revisions) - 1,
+            "items": [revision.payload(current=index == cursor) for index, revision in enumerate(revisions)],
+        }
+
+    def mark_exported(self) -> None:
+        self._ensure_open()
+        for relative_path, revisions in self._revisions.items():
+            self._saved_revisions[relative_path] = revisions[self._revision_cursors[relative_path]].revision
 
     def validate_active_difficulty(self) -> Beatmap:
         self._ensure_open()
@@ -333,6 +474,7 @@ class BeatmapsetSession:
                 raise
             raise ExportError(f"Could not export beatmapset to {output}: {exc}") from exc
 
+        self.mark_exported()
         return output
 
     def source_is_unchanged(self) -> bool:

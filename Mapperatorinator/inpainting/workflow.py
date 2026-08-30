@@ -23,6 +23,32 @@ class GenerationValidationError(GenerationTransactionError):
 InferenceRunner = Callable[[InferenceConfig], Any]
 
 
+def generation_revision_metadata(config: InferenceConfig) -> dict[str, Any]:
+    """Capture enough conditioning state to explain or repeat one generation."""
+    return {
+        "kind": "generation",
+        "start_time": config.start_time,
+        "end_time": config.end_time,
+        "seed": config.seed,
+        "descriptors": list(config.descriptors or []),
+        "negative_descriptors": list(config.negative_descriptors or []),
+        "difficulty": config.difficulty,
+        "mapper_id": config.mapper_id,
+        "year": config.year,
+        "temperature": config.temperature,
+        "cfg_scale": config.cfg_scale,
+        "top_p": config.top_p,
+        "lookback": config.lookback,
+        "lookahead": config.lookahead,
+        "hitsounded": config.hitsounded,
+        "timing_context": any(
+            getattr(context, "value", context) == "timing"
+            for context in (config.in_context or [])
+        ),
+        "lora_path": config.lora_path,
+    }
+
+
 def build_inpainting_config(
     base_config: InferenceConfig,
     session: BeatmapsetSession,
@@ -94,5 +120,5 @@ def regenerate_interval(
             f"Interval generation failed; restored {active_path.name}: {exc}"
         ) from exc
 
-    session.mark_dirty()
+    session.record_revision(metadata=generation_revision_metadata(config))
     return result

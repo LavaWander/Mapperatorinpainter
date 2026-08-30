@@ -39,7 +39,7 @@ from osuT5.osuT5.utils import load_model_loaders
 from inference import compile_args, get_server_address, main, should_load_separate_timing_model
 from inpainting.session import BeatmapsetSession
 from inpainting.ui import compose_inpainting_config, session_payload
-from inpainting.workflow import regenerate_interval, restore_snapshot
+from inpainting.workflow import generation_revision_metadata, regenerate_interval, restore_snapshot
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 template_folder = os.path.join(script_dir, 'template')
@@ -553,7 +553,7 @@ def _get_inpaint_session(session_id: str) -> BeatmapsetSession:
 def _session_has_active_job(session_id: str) -> bool:
     with process_lock:
         return any(
-            record.get("inpaint_session_id") == session_id and record["process"].is_alive()
+            record.get("inpaint_session_id") == session_id
             for record in processes.values()
         )
 
@@ -811,6 +811,7 @@ def start_inpaint():
                 "inpaint_session_id": session_id,
                 "inpaint_path": active_path,
                 "inpaint_snapshot": snapshot,
+                "inpaint_revision_metadata": generation_revision_metadata(cfg),
                 "success_event": success_event,
             }
         return jsonify({
@@ -837,7 +838,47 @@ def export_inpaint_session():
             request.form.get('destination') or '',
             overwrite=(request.form.get('overwrite') == 'true'),
         )
-        return jsonify({"status": "success", "path": str(destination)})
+        return jsonify({
+            "status": "success",
+            "path": str(destination),
+            "session": session_payload(session_id, session),
+        })
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/inpaint/state', methods=['POST'])
+def inpaint_session_state():
+    session_id = (request.form.get('session_id') or '').strip()
+    try:
+        session = _get_inpaint_session(session_id)
+        return jsonify({"status": "success", "session": session_payload(session_id, session)})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/inpaint/undo', methods=['POST'])
+def undo_inpaint_revision():
+    session_id = (request.form.get('session_id') or '').strip()
+    try:
+        session = _get_inpaint_session(session_id)
+        if _session_has_active_job(session_id):
+            raise ValueError("Wait for regeneration to finish before undoing.")
+        session.undo()
+        return jsonify({"status": "success", "session": session_payload(session_id, session)})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/inpaint/redo', methods=['POST'])
+def redo_inpaint_revision():
+    session_id = (request.form.get('session_id') or '').strip()
+    try:
+        session = _get_inpaint_session(session_id)
+        if _session_has_active_job(session_id):
+            raise ValueError("Wait for regeneration to finish before redoing.")
+        session.redo()
+        return jsonify({"status": "success", "session": session_payload(session_id, session)})
     except Exception as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
 
@@ -849,6 +890,13 @@ def close_inpaint_session():
         if _session_has_active_job(session_id):
             raise ValueError("Wait for regeneration to finish before closing the session.")
         with inpaint_sessions_lock:
+            session = inpaint_sessions.get(session_id)
+            if session is not None and session.dirty and request.form.get('discard') != 'true':
+                return jsonify({
+                    "status": "error",
+                    "message": "The Inpaint session has unsaved generations.",
+                    "unsaved_changes": True,
+                }), 409
             session = inpaint_sessions.pop(session_id, None)
         if session is not None:
             session.cleanup()
@@ -920,7 +968,10 @@ def stream_output():
                 try:
                     session = _get_inpaint_session(session_id)
                     if succeeded:
-                        session.mark_dirty()
+                        session.record_revision(
+                            path=rec["inpaint_path"],
+                            metadata=rec["inpaint_revision_metadata"],
+                        )
                     else:
                         restore_snapshot(rec["inpaint_path"], rec["inpaint_snapshot"])
                 except Exception:

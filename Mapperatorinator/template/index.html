@@ -564,7 +564,10 @@
                             </div>
                             <div class="metadata-group">
                                 <label for="inpaint_seed">Seed:</label>
-                                <input type="number" id="inpaint_seed" name="seed" min="0" placeholder="Random" />
+                                <div class="inline-input-action">
+                                    <input type="number" id="inpaint_seed" name="seed" min="0" placeholder="Random" />
+                                    <button type="button" id="inpaint-random-seed" class="browse-button">Random</button>
+                                </div>
                             </div>
                         </div>
                         <div class="metadata-row compact-controls">
@@ -592,9 +595,24 @@
                         </details>
                     </fieldset>
 
+                    <fieldset id="inpaint-revision-panel" disabled>
+                        <legend>Revision history</legend>
+                        <div class="revision-toolbar">
+                            <span id="inpaint-current-revision">Revision 0 · Original</span>
+                            <div>
+                                <button type="button" id="inpaint-undo-button" class="browse-button" disabled>Undo</button>
+                                <button type="button" id="inpaint-redo-button" class="browse-button" disabled>Redo</button>
+                            </div>
+                        </div>
+                        <ol id="inpaint-revision-history" class="revision-history">
+                            <li>No beatmapset open</li>
+                        </ol>
+                    </fieldset>
+
                     <div class="inpaint-actions">
                         <button type="submit" id="inpaint-generate-button" disabled>Regenerate interval</button>
                         <button type="button" id="inpaint-export-button" class="browse-button" disabled>Export .osz</button>
+                        <button type="button" id="inpaint-close-button" class="browse-button" disabled>Close map</button>
                     </div>
                 </form>
             </section>

@@ -1023,3 +1023,47 @@ input[type="number"]:hover::-webkit-outer-spin-button {
 .inpaint-actions button {
     flex: 1 1 200px;
 }
+
+.inline-input-action,
+.revision-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.inline-input-action input {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.inline-input-action button {
+    flex: 0 0 auto;
+}
+
+.revision-toolbar {
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+.revision-toolbar > span {
+    font-weight: 600;
+}
+
+.revision-history {
+    max-height: 180px;
+    margin: 12px 0 0;
+    padding-left: 28px;
+    overflow-y: auto;
+    color: var(--text-secondary);
+}
+
+.revision-history li {
+    padding: 4px 6px;
+}
+
+.revision-history li.current {
+    color: var(--text-primary);
+    font-weight: 600;
+    background: rgba(255, 59, 63, 0.1);
+    border-radius: 4px;
+}

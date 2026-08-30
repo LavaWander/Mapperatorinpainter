@@ -111,10 +111,56 @@ class InpaintWebUiTests(unittest.TestCase):
         self.assertTrue(all(config.use_server for config in ensured_configs))
         self.assertTrue(all(config.descriptors == ["skillset/streams", "streams/stamina"] for config in ensured_configs))
         self.assertEqual(32, second.get_json()["seed"])
+        revision_state = self.web_ui._get_inpaint_session(session_id).revision_payload()
+        self.assertEqual(1, revision_state["current_revision"])
+        self.assertEqual(32, revision_state["items"][-1]["metadata"]["seed"])
+        self.assertEqual(["skillset/streams", "streams/stamina"], revision_state["items"][-1]["metadata"]["descriptors"])
+
+    def test_undo_redo_and_dirty_close_are_enforced_by_endpoints(self) -> None:
+        opened = self.post("/inpaint/open", {"path": str(self.source)})
+        session_data = opened.get_json()["session"]
+        session_id = session_data["session_id"]
+        session = self.web_ui._get_inpaint_session(session_id)
+        path = session.active_difficulty.path
+        original = path.read_bytes()
+        modified = original.replace(b"Version:Expert", b"Version:Changed")
+        path.write_bytes(modified)
+        session.record_revision(metadata={"kind": "generation", "seed": 44})
+
+        protected_close = self.post("/inpaint/close", {"session_id": session_id})
+        self.assertEqual(409, protected_close.status_code)
+        self.assertTrue(protected_close.get_json()["unsaved_changes"])
+
+        undone = self.post("/inpaint/undo", {"session_id": session_id})
+        self.assertEqual(200, undone.status_code)
+        self.assertFalse(undone.get_json()["session"]["dirty"])
+        self.assertEqual(original, path.read_bytes())
+
+        redone = self.post("/inpaint/redo", {"session_id": session_id})
+        self.assertEqual(200, redone.status_code)
+        self.assertTrue(redone.get_json()["session"]["dirty"])
+        self.assertEqual(modified, path.read_bytes())
+
+        discarded = self.post("/inpaint/close", {"session_id": session_id, "discard": "true"})
+        self.assertEqual(200, discarded.status_code)
+        self.assertFalse(session.working_directory.exists())
 
     def test_session_mutations_require_csrf(self) -> None:
         response = self.client.post("/inpaint/open", data={"path": str(self.source)})
         self.assertEqual(403, response.status_code)
+
+    def test_m4_controls_are_rendered(self) -> None:
+        response = self.client.get("/")
+        self.assertEqual(200, response.status_code)
+        html = response.get_data(as_text=True)
+        for control_id in (
+            "inpaint-random-seed",
+            "inpaint-undo-button",
+            "inpaint-redo-button",
+            "inpaint-revision-history",
+            "inpaint-close-button",
+        ):
+            self.assertIn(f'id="{control_id}"', html)
 
 
 if __name__ == "__main__":

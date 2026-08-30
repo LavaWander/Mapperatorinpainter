@@ -379,20 +379,20 @@ Generation 2
 Generation 3
 ```
 
-- [ ] Undo last regeneration.
-- [ ] Redo if reasonably easy.
-- [ ] Keep snapshots session-local.
-- [ ] Don't copy audio/assets for every revision; only version the `.osu`.
+- [x] Undo last regeneration.
+- [x] Redo if reasonably easy.
+- [x] Keep snapshots session-local.
+- [x] Don't copy audio/assets for every revision; only version the `.osu`.
 
 This is high-value. Don't leave it until the end.
 
 ### 5.3 Seed workflow
 
-- [ ] Random seed button.
-- [ ] Display actual seed used.
-- [ ] Preserve seed after generation.
-- [ ] Allow exact regeneration with same seed/settings.
-- [ ] Record seed with revision metadata if possible.
+- [x] Random seed button.
+- [x] Display actual seed used.
+- [x] Preserve seed after generation.
+- [x] Allow exact regeneration with same seed/settings.
+- [x] Record seed with revision metadata if possible.
 
 ### 5.4 Generation history
 
@@ -407,6 +407,8 @@ Difficulty: 6.2
 ```
 
 Doesn't initially need a fancy UI, but store enough information that one can be added later.
+
+- [x] Store and display revision range, actual seed, descriptors, calculated/selected difficulty, and other generation settings.
 
 ## Phase 6 — Save/export
 
@@ -449,8 +451,8 @@ map.osz
 
 On closing/opening another map with unsaved generations:
 
-- [ ] Warn about unsaved changes.
-- [ ] Save / Discard / Cancel.
+- [x] Warn about unsaved changes.
+- [x] Save / Discard / Cancel.
 
 ## Phase 7 — Preview integration abstraction
 
@@ -677,7 +679,11 @@ Treat these as hard stopping points rather than trying to implement the entire b
 
 **M3 — Usable Inpaint tab:** All important conditioning controls exposed, model shared with Generate, repeated regeneration works.
 
+**Status:** Complete (2026-08-29). See `M3_INPAINT_TAB_PROOF.md`.
+
 **M4 — Safe iteration:** Undo/redo, seeds, generation history, dirty-state handling.
+
+**Status:** Complete (2026-08-30). See `M4_SAFE_ITERATION_PROOF.md`.
 
 **M5 — Preview:** Danser launches reliably at the regenerated section.
 
