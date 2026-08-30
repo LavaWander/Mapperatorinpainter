@@ -1602,6 +1602,7 @@ $(document).ready(function() {
     const InpaintManager = {
         session: null,
         busy: false,
+        previewing: false,
 
         init() {
             $('#inpaint-open-button').on('click', () => this.open());
@@ -1612,13 +1613,52 @@ $(document).ready(function() {
             $('#inpaint-undo-button').on('click', () => this.changeRevision('undo'));
             $('#inpaint-redo-button').on('click', () => this.changeRevision('redo'));
             $('#inpaint-random-seed').on('click', () => this.randomizeSeed());
+            $('#inpaint-preview-button').on('click', () => this.preview());
             $('#inpaint_model').on('change', () => this.updateModelControls());
+            $('#inpaint_preview_padding_before, #inpaint_preview_padding_after').on('change', () => {
+                this.savePreviewPadding();
+            });
             window.addEventListener('beforeunload', (event) => {
                 if (!this.session?.dirty) return;
                 event.preventDefault();
                 event.returnValue = '';
             });
+            this.loadPreviewPadding();
+            this.renderPreviewStatus();
             this.updateModelControls();
+        },
+
+        loadPreviewPadding() {
+            try {
+                const before = window.localStorage.getItem('inpaint.previewPaddingBefore');
+                const after = window.localStorage.getItem('inpaint.previewPaddingAfter');
+                if (before !== null) $('#inpaint_preview_padding_before').val(before);
+                if (after !== null) $('#inpaint_preview_padding_after').val(after);
+            } catch (_) {
+                // Preview padding is a harmless preference; defaults remain usable.
+            }
+        },
+
+        savePreviewPadding() {
+            try {
+                window.localStorage.setItem('inpaint.previewPaddingBefore', $('#inpaint_preview_padding_before').val());
+                window.localStorage.setItem('inpaint.previewPaddingAfter', $('#inpaint_preview_padding_after').val());
+            } catch (_) {
+                // Storage may be unavailable in a locked-down embedded browser.
+            }
+        },
+
+        renderPreviewStatus(message = null) {
+            const danser = window.APP_BOOTSTRAP?.danserStatus || {};
+            let text = message;
+            if (!text && this.session && this.session.active_difficulty?.mode !== 0) {
+                text = 'Unavailable for this mode; Danser supports osu!standard only.';
+            } else if (!text && danser.available) {
+                text = `Danser ${danser.version} ready`;
+            } else if (!text) {
+                text = `Danser ${danser.version || '0.11.0'} not installed — run Install Danser Preview.bat`;
+            }
+            $('#inpaint-preview-status').text(text);
         },
 
         updateModelControls() {
@@ -1640,16 +1680,19 @@ $(document).ready(function() {
 
         setBusy(busy) {
             this.busy = busy;
-            $('#inpaint-generate-button').prop('disabled', busy || !this.session)
+            $('#inpaint-generate-button').prop('disabled', busy || this.previewing || !this.session)
                 .text(busy ? 'Regenerating…' : 'Regenerate interval');
-            $('#inpaint-open-button').prop('disabled', busy);
-            $('#inpaint_difficulty').prop('disabled', busy || !this.session);
-            $('#inpaint-export-button').prop('disabled', busy || !this.session);
-            $('#inpaint-close-button').prop('disabled', busy || !this.session);
+            $('#inpaint-open-button').prop('disabled', busy || this.previewing);
+            $('#inpaint_difficulty').prop('disabled', busy || this.previewing || !this.session);
+            $('#inpaint-export-button').prop('disabled', busy || this.previewing || !this.session);
+            $('#inpaint-close-button').prop('disabled', busy || this.previewing || !this.session);
+            $('#inpaint-preview-button')
+                .prop('disabled', busy || this.previewing || !this.session || this.session?.active_difficulty?.mode !== 0)
+                .text(this.previewing ? 'Launching Danser…' : 'Preview in Danser');
             const revisions = this.session?.revisions;
-            $('#inpaint-undo-button').prop('disabled', busy || !revisions?.can_undo);
-            $('#inpaint-redo-button').prop('disabled', busy || !revisions?.can_redo);
-            $('#inpaint-random-seed').prop('disabled', busy);
+            $('#inpaint-undo-button').prop('disabled', busy || this.previewing || !revisions?.can_undo);
+            $('#inpaint-redo-button').prop('disabled', busy || this.previewing || !revisions?.can_redo);
+            $('#inpaint-random-seed').prop('disabled', busy || this.previewing);
         },
 
         request(url, data) {
@@ -1705,6 +1748,7 @@ $(document).ready(function() {
             $('#inpaint-session-state').text(session.dirty ? 'Working copy modified' : 'Working copy ready')
                 .toggleClass('dirty', Boolean(session.dirty));
             DescriptorManager.renderCurrentDescriptors('inpaint');
+            this.renderPreviewStatus();
             this.renderRevisions();
 
             const defaultEnd = Math.min(active.length_ms || 10000, 10000);
@@ -1802,6 +1846,32 @@ $(document).ready(function() {
             }
         },
 
+        async preview() {
+            if (!this.session || this.busy || this.previewing) return;
+            this.previewing = true;
+            this.setBusy(this.busy);
+            this.savePreviewPadding();
+            try {
+                const response = await this.request('/inpaint/preview', {
+                    session_id: this.session.session_id,
+                    start_time: $('#inpaint_start_time').val(),
+                    end_time: $('#inpaint_end_time').val(),
+                    padding_before: $('#inpaint_preview_padding_before').val(),
+                    padding_after: $('#inpaint_preview_padding_after').val()
+                });
+                const range = `${this.formatTimestamp(response.start_time)}–${this.formatTimestamp(response.end_time)}`;
+                this.renderPreviewStatus(`${response.viewer} · ${response.difficulty} · ${range}`);
+                Utils.showFlashMessage(`Previewing ${range} in ${response.viewer}.`);
+            } catch (error) {
+                const message = error.responseJSON?.message || 'Could not launch Danser preview.';
+                this.renderPreviewStatus(message);
+                Utils.showFlashMessage(message, 'error');
+            } finally {
+                this.previewing = false;
+                this.setBusy(this.busy);
+            }
+        },
+
         regenerate(event) {
             event.preventDefault();
             if (!this.session || this.busy) return;
@@ -1890,6 +1960,7 @@ $(document).ready(function() {
             $('#inpaint_difficulty').empty().append($('<option>').text('Open a beatmapset first')).prop('disabled', true);
             $('#inpaint_audio, #inpaint_length, #inpaint_title, #inpaint_artist, #inpaint_mode, #inpaint_mapper, #inpaint_cs, #inpaint_ar, #inpaint_od, #inpaint_hp, #inpaint_slider_multiplier, #inpaint_slider_tick_rate').text('—');
             $('#inpaint-session-state').text('No beatmapset open').removeClass('dirty');
+            this.renderPreviewStatus();
             this.renderRevisions();
             this.setBusy(false);
         },

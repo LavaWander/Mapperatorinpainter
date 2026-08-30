@@ -475,7 +475,7 @@ preview(
 For now it can:
 
 - [ ] reveal working directory, or
-- [ ] invoke a configurable external command, or
+- [x] invoke an external viewer through the preview abstraction, or
 - [ ] simply remain unavailable until viewer integration.
 
 The important part is that Inpaint code doesn't directly depend on Danser internals.
@@ -494,6 +494,10 @@ preview:
 
 Default perhaps ±3 seconds.
 
+**Status:** Complete for M5. Before/after padding defaults to three seconds, is
+persisted independently of the regeneration fields, and is passed through the
+viewer-neutral preview request.
+
 This lets you judge **transitions**, not merely the generated objects.
 
 ## Phase 8 — Danser integration
@@ -504,14 +508,14 @@ Only start this after Phases 1–6 work reliably.
 
 Determine experimentally:
 
-- [ ] Can Danser directly open arbitrary loose `.osu`?
-- [ ] If not, how does its beatmap scanner work?
-- [ ] Can a session directory be added to its song sources?
-- [ ] Can changed `.osu` files be detected without restarting Danser?
-- [ ] Can the currently selected difficulty be addressed reliably?
-- [ ] Startup latency.
-- [ ] Rescan latency.
-- [ ] Whether an already-running Danser instance can be reused.
+- [x] Can Danser directly open arbitrary loose `.osu`?
+- [x] If not, how does its beatmap scanner work?
+- [x] Can a session directory be added to its song sources?
+- [x] Can changed `.osu` files be detected without restarting Danser?
+- [x] Can the currently selected difficulty be addressed reliably?
+- [x] Startup latency.
+- [x] Rescan latency.
+- [x] Whether an already-running Danser instance can be reused.
 
 **Do not design around assumptions here. Test it.**
 
@@ -530,6 +534,8 @@ selected_start - padding
         ↓
 selected_end + padding
 ```
+
+**Status:** Complete (2026-08-30). See `M5_DANSER_PREVIEW_PROOF.md`.
 
 ### 8.3 Automatic preview
 
@@ -686,6 +692,8 @@ Treat these as hard stopping points rather than trying to implement the entire b
 **Status:** Complete (2026-08-30). See `M4_SAFE_ITERATION_PROOF.md`.
 
 **M5 — Preview:** Danser launches reliably at the regenerated section.
+
+**Status:** Complete (2026-08-30). See `M5_DANSER_PREVIEW_PROOF.md`.
 
 **M6 — Fast workflow:** automatic preview/reload, timeline selection, keyboard shortcuts.
 

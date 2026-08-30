@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from inpainting.preview import PreviewLaunch
 from tests.test_inpainting_session import normal_entries, write_archive
 
 
@@ -63,6 +64,7 @@ class InpaintWebUiTests(unittest.TestCase):
             self.web_ui.processes.clear()
         for record in records:
             record["queue"].close()
+        self.web_ui._shutdown_inpaint_previewers()
         with self.web_ui.inpaint_sessions_lock:
             sessions = list(self.web_ui.inpaint_sessions.values())
             self.web_ui.inpaint_sessions.clear()
@@ -159,6 +161,47 @@ class InpaintWebUiTests(unittest.TestCase):
             "inpaint-redo-button",
             "inpaint-revision-history",
             "inpaint-close-button",
+        ):
+            self.assertIn(f'id="{control_id}"', html)
+
+    def test_preview_endpoint_applies_independent_padding(self) -> None:
+        opened = self.post("/inpaint/open", {"path": str(self.source)})
+        session_data = opened.get_json()["session"]
+        session_id = session_data["session_id"]
+        session = self.web_ui._get_inpaint_session(session_id)
+
+        class FakePreviewer:
+            def __init__(self):
+                self.calls = []
+
+            def preview(self, beatmap_path, start_time, end_time):
+                self.calls.append((Path(beatmap_path), start_time, end_time))
+                return PreviewLaunch(Path(beatmap_path), start_time, end_time, 1234, "Danser 0.11.0")
+
+        previewer = FakePreviewer()
+        with patch.object(self.web_ui, "_get_inpaint_previewer", return_value=previewer):
+            response = self.post("/inpaint/preview", {
+                "session_id": session_id,
+                "start_time": "00:02.000",
+                "end_time": "00:04.000",
+                "padding_before": "3",
+                "padding_after": "1.5",
+            })
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual((0, min(5_500, session.active_difficulty.length_ms)), previewer.calls[0][1:])
+        self.assertEqual(session.active_difficulty.path, previewer.calls[0][0])
+        self.assertEqual("Danser 0.11.0", response.get_json()["viewer"])
+
+    def test_m5_controls_are_rendered(self) -> None:
+        response = self.client.get("/")
+        self.assertEqual(200, response.status_code)
+        html = response.get_data(as_text=True)
+        for control_id in (
+            "inpaint-preview-button",
+            "inpaint_preview_padding_before",
+            "inpaint_preview_padding_after",
+            "inpaint-preview-status",
         ):
             self.assertIn(f'id="{control_id}"', html)
 

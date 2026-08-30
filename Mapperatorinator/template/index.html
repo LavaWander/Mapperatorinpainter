@@ -529,6 +529,25 @@
                     </fieldset>
 
                     <fieldset>
+                        <legend>Preview</legend>
+                        <p class="section-hint">Danser previews the transition around the selected range. Preview padding does not change what gets regenerated.</p>
+                        <div class="metadata-row compact-controls">
+                            <div class="metadata-group">
+                                <label for="inpaint_preview_padding_before">Padding before (seconds):</label>
+                                <input type="number" id="inpaint_preview_padding_before" min="0" max="30" step="0.5" value="3" />
+                            </div>
+                            <div class="metadata-group">
+                                <label for="inpaint_preview_padding_after">Padding after (seconds):</label>
+                                <input type="number" id="inpaint_preview_padding_after" min="0" max="30" step="0.5" value="3" />
+                            </div>
+                            <div class="metadata-group wide-group">
+                                <label>Viewer:</label>
+                                <output id="inpaint-preview-status">Checking Danser…</output>
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <fieldset>
                         <legend>Generation conditioning</legend>
                         <p class="section-hint">Blank values inherit from the reference map where Mapperatorinator supports it.</p>
                         <label for="inpaint_model">Model:</label>
@@ -611,6 +630,7 @@
 
                     <div class="inpaint-actions">
                         <button type="submit" id="inpaint-generate-button" disabled>Regenerate interval</button>
+                        <button type="button" id="inpaint-preview-button" class="browse-button" disabled>Preview in Danser</button>
                         <button type="button" id="inpaint-export-button" class="browse-button" disabled>Export .osz</button>
                         <button type="button" id="inpaint-close-button" class="browse-button" disabled>Close map</button>
                     </div>
@@ -631,7 +651,8 @@
         window.APP_BOOTSTRAP = {
             csrfToken: {{ csrf_token | tojson }},
             csrfHeaderName: {{ csrf_header_name | tojson }},
-            descriptorSets: {{ descriptor_sets | tojson }}
+            descriptorSets: {{ descriptor_sets | tojson }},
+            danserStatus: {{ danser_status | tojson }}
         };
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>

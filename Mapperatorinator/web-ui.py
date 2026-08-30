@@ -37,8 +37,9 @@ from osuT5.osuT5.event import ContextType
 from osuT5.osuT5.inference.server import InferenceClient
 from osuT5.osuT5.utils import load_model_loaders
 from inference import compile_args, get_server_address, main, should_load_separate_timing_model
+from inpainting.preview import DANSER_VERSION, DanserPreviewer, PreviewError, find_danser_executable
 from inpainting.session import BeatmapsetSession
-from inpainting.ui import compose_inpainting_config, session_payload
+from inpainting.ui import compose_inpainting_config, parse_timestamp_ms, session_payload
 from inpainting.workflow import generation_revision_metadata, regenerate_interval, restore_snapshot
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -168,6 +169,7 @@ CSRF_PROTECTED_ENDPOINTS = {
     'start_inpaint',
     'export_inpaint_session',
     'close_inpaint_session',
+    'preview_inpaint_session',
 }
 
 
@@ -300,6 +302,8 @@ owned_server_clients = {}
 owned_server_clients_lock = threading.Lock()
 inpaint_sessions = {}
 inpaint_sessions_lock = threading.Lock()
+inpaint_previewers = {}
+inpaint_previewers_lock = threading.Lock()
 shutdown_lock = threading.Lock()
 shutdown_started = False
 
@@ -407,6 +411,24 @@ def _shutdown_owned_model_servers():
             traceback.print_exc()
 
 
+def _close_inpaint_previewer(session_id: str) -> None:
+    with inpaint_previewers_lock:
+        previewer = inpaint_previewers.pop(session_id, None)
+    if previewer is not None:
+        previewer.close()
+
+
+def _shutdown_inpaint_previewers() -> None:
+    with inpaint_previewers_lock:
+        previewers = list(inpaint_previewers.values())
+        inpaint_previewers.clear()
+    for previewer in previewers:
+        try:
+            previewer.close()
+        except Exception:
+            traceback.print_exc()
+
+
 def _shutdown_application_resources():
     global shutdown_started
 
@@ -416,6 +438,7 @@ def _shutdown_application_resources():
         shutdown_started = True
 
     _shutdown_inference_processes()
+    _shutdown_inpaint_previewers()
     with inpaint_sessions_lock:
         sessions = list(inpaint_sessions.values())
         inpaint_sessions.clear()
@@ -558,17 +581,43 @@ def _session_has_active_job(session_id: str) -> bool:
         )
 
 
+def _get_inpaint_previewer(session_id: str, session: BeatmapsetSession) -> DanserPreviewer:
+    with inpaint_previewers_lock:
+        previewer = inpaint_previewers.get(session_id)
+        if previewer is not None:
+            return previewer
+
+        executable = find_danser_executable(Path(script_dir).parent)
+        if executable is None:
+            raise PreviewError(
+                f"Danser {DANSER_VERSION} is not installed for previews. "
+                "Close Mapperatorinpainter, run 'Install Danser Preview.bat', then reopen it."
+            )
+        previewer = DanserPreviewer(
+            executable=executable,
+            beatmapset_root=session.working_directory,
+        )
+        inpaint_previewers[session_id] = previewer
+        return previewer
+
+
 # --- Flask Routes ---
 
 @app.route('/')
 def index():
     """Renders the main HTML page."""
     # Jinja rendering is now handled by Flask's render_template
+    danser_executable = find_danser_executable(Path(script_dir).parent)
     return render_template(
         'index.html',
         csrf_token=LOCAL_UI_CSRF_TOKEN,
         csrf_header_name=CSRF_HEADER_NAME,
         descriptor_sets=DESCRIPTOR_SETS,
+        danser_status={
+            'available': danser_executable is not None,
+            'version': DANSER_VERSION,
+            'path': str(danser_executable) if danser_executable else None,
+        },
     )
 
 
@@ -847,6 +896,56 @@ def export_inpaint_session():
         return jsonify({"status": "error", "message": str(exc)}), 400
 
 
+@app.route('/inpaint/preview', methods=['POST'])
+def preview_inpaint_session():
+    """Launch the active standard difficulty around the regeneration interval."""
+    session_id = (request.form.get('session_id') or '').strip()
+    try:
+        session = _get_inpaint_session(session_id)
+        if _session_has_active_job(session_id):
+            raise ValueError("Wait for regeneration to finish before previewing.")
+        if session.active_difficulty.mode != 0:
+            raise ValueError("Danser previews support only osu!standard difficulties (mode 0).")
+
+        selected_start = parse_timestamp_ms(request.form.get('start_time') or '')
+        selected_end = parse_timestamp_ms(request.form.get('end_time') or '')
+        if selected_end <= selected_start:
+            raise ValueError("Preview end time must be after its start time.")
+
+        before_seconds = float(request.form.get('padding_before') or '3')
+        after_seconds = float(request.form.get('padding_after') or '3')
+        if not 0 <= before_seconds <= 30 or not 0 <= after_seconds <= 30:
+            raise ValueError("Preview padding must be between 0 and 30 seconds.")
+
+        map_length = session.active_difficulty.length_ms
+        if map_length is not None and selected_end > map_length:
+            raise ValueError("The selected interval extends beyond the active difficulty.")
+        preview_start = max(0, selected_start - round(before_seconds * 1_000))
+        preview_end = selected_end + round(after_seconds * 1_000)
+        if map_length is not None:
+            preview_end = min(preview_end, map_length)
+
+        previewer = _get_inpaint_previewer(session_id, session)
+        launched = previewer.preview(
+            session.active_difficulty.path,
+            preview_start,
+            preview_end,
+        )
+        return jsonify({
+            "status": "success",
+            "viewer": launched.viewer,
+            "process_id": launched.process_id,
+            "start_time": launched.start_time,
+            "end_time": launched.end_time,
+            "difficulty": session.active_difficulty.version,
+        })
+    except (ValueError, PreviewError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": f"Could not launch preview: {exc}"}), 500
+
+
 @app.route('/inpaint/state', methods=['POST'])
 def inpaint_session_state():
     session_id = (request.form.get('session_id') or '').strip()
@@ -899,6 +998,7 @@ def close_inpaint_session():
                 }), 409
             session = inpaint_sessions.pop(session_id, None)
         if session is not None:
+            _close_inpaint_previewer(session_id)
             session.cleanup()
         return jsonify({"status": "success"})
     except Exception as exc:
