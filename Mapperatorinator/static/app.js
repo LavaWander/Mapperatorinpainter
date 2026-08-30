@@ -1724,8 +1724,8 @@ $(document).ready(function() {
 
         async open() {
             const path = ($('#inpaint_osz_path').val() || '').trim();
-            if (!path.toLowerCase().endsWith('.osz')) {
-                Utils.showFlashMessage('Choose a valid .osz beatmapset.', 'error');
+            if (!path) {
+                Utils.showFlashMessage('Choose an .osz beatmapset or song folder.', 'error');
                 return;
             }
             if (this.session) {
@@ -1943,19 +1943,9 @@ $(document).ready(function() {
 
         async exportBeatmapset() {
             if (!this.session || this.busy) return false;
-            const sourceStem = this.session.source_name.replace(/\.osz$/i, '');
-            let destination = null;
-            if (window.pywebview?.api?.save_file) {
-                destination = await window.pywebview.api.save_file(`${sourceStem}-inpainted.osz`);
-            } else {
-                destination = window.prompt('Export destination (.osz):', `${sourceStem}-inpainted.osz`);
-            }
-            if (!destination) return false;
-            if (!destination.toLowerCase().endsWith('.osz')) destination += '.osz';
             try {
                 const response = await this.request('/inpaint/export', {
-                    session_id: this.session.session_id,
-                    destination
+                    session_id: this.session.session_id
                 });
                 this.renderSession(response.session);
                 Utils.showFlashMessage(`Exported ${response.path}.`);

@@ -150,6 +150,38 @@ class InpaintWebUiTests(unittest.TestCase):
         self.assertEqual(200, discarded.status_code)
         self.assertFalse(session.working_directory.exists())
 
+    def test_inpaint_export_uses_automatic_unique_output_directory(self) -> None:
+        opened = self.post("/inpaint/open", {"path": str(self.source)})
+        session_id = opened.get_json()["session"]["session_id"]
+        output_directory = Path(self.temporary_directory.name) / "inpaint_output"
+
+        with patch.object(self.web_ui, "INPAINT_OUTPUT_DIRECTORY", output_directory):
+            first = self.post("/inpaint/export", {"session_id": session_id})
+            second = self.post("/inpaint/export", {"session_id": session_id})
+
+        self.assertEqual(200, first.status_code)
+        self.assertEqual(200, second.status_code)
+        first_path = Path(first.get_json()["path"])
+        second_path = Path(second.get_json()["path"])
+        self.assertEqual(output_directory, first_path.parent)
+        self.assertTrue(first_path.name.endswith("__R000__original.osz"))
+        self.assertTrue(second_path.stem.endswith("__02"))
+        self.assertNotEqual(first_path, second_path)
+
+    def test_open_song_folder_endpoint_uses_working_copy(self) -> None:
+        source_folder = Path(self.temporary_directory.name) / "song-folder"
+        source_folder.mkdir()
+        for relative_name, content in normal_entries().items():
+            path = source_folder / relative_name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+
+        opened = self.post("/inpaint/open", {"path": str(source_folder)})
+        self.assertEqual(200, opened.status_code)
+        payload = opened.get_json()["session"]
+        self.assertEqual(source_folder.name, payload["source_name"])
+        self.assertNotEqual(str(source_folder), payload["working_directory"])
+
     def test_session_mutations_require_csrf(self) -> None:
         response = self.client.post("/inpaint/open", data={"path": str(self.source)})
         self.assertEqual(403, response.status_code)
@@ -328,6 +360,8 @@ class InpaintWebUiTests(unittest.TestCase):
             "copy-end-button",
             "auto-play-updates",
             "hitsounds-enabled",
+            "hitsound-volume",
+            "hitsound-volume-value",
             "danser-button",
         ):
             self.assertIn(f'id="{control_id}"', html)

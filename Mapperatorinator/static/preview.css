@@ -152,6 +152,26 @@ p { margin: 0; }
 .toggle input { accent-color: var(--accent); }
 .transport-row .toggle:first-of-type { margin-left: auto; }
 
+.volume-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--muted);
+    font-size: 0.86rem;
+}
+
+.volume-control input {
+    width: 120px;
+    accent-color: var(--accent);
+}
+
+#hitsound-volume-value {
+    width: 3.2em;
+    color: var(--text);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
 .timeline-card { padding: 18px; }
 .timeline-heading, .selection-readout, .danser-card {
     display: flex;

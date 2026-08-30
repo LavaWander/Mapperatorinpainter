@@ -47,6 +47,7 @@ from inpainting.workflow import generation_revision_metadata, regenerate_interva
 script_dir = os.path.dirname(os.path.abspath(__file__))
 template_folder = os.path.join(script_dir, 'template')
 static_folder = os.path.join(script_dir, 'static')
+INPAINT_OUTPUT_DIRECTORY = Path(script_dir).parent / "inpaint_output"
 descriptor_dataset_paths = {
     'omdb': Path(script_dir) / 'datasets' / 'omdb_descriptors.json',
     'user_tags': Path(script_dir) / 'datasets' / 'tags_2026.json',
@@ -969,10 +970,10 @@ def start_inference():
 
 @app.route('/inpaint/open', methods=['POST'])
 def open_inpaint_session():
-    """Extract an immutable source `.osz` once and return its selectable difficulties."""
+    """Copy an immutable `.osz` or song folder and return its difficulties."""
     source_path = (request.form.get('path') or '').strip()
     if not source_path:
-        return jsonify({"status": "error", "message": "Choose an .osz beatmapset first."}), 400
+        return jsonify({"status": "error", "message": "Choose an .osz beatmapset or song folder first."}), 400
 
     session = None
     session_id = None
@@ -1082,10 +1083,7 @@ def export_inpaint_session():
         session = _get_inpaint_session(session_id)
         if _session_has_active_job(session_id):
             raise ValueError("Wait for regeneration to finish before exporting.")
-        destination = session.export(
-            request.form.get('destination') or '',
-            overwrite=(request.form.get('overwrite') == 'true'),
-        )
+        destination = session.export(session.next_export_path(INPAINT_OUTPUT_DIRECTORY))
         return jsonify({
             "status": "success",
             "path": str(destination),

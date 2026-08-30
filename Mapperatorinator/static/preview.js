@@ -12,6 +12,8 @@
     const audio = document.getElementById('preview-audio');
     const autoPlayUpdates = document.getElementById('auto-play-updates');
     const hitsoundsEnabled = document.getElementById('hitsounds-enabled');
+    const hitsoundVolume = document.getElementById('hitsound-volume');
+    const hitsoundVolumeValue = document.getElementById('hitsound-volume-value');
     const channel = typeof BroadcastChannel === 'function'
         ? new BroadcastChannel('mapperatorinpainter-preview')
         : null;
@@ -496,7 +498,8 @@
         if (!hitsoundContext || !buffer) return;
         const source = hitsoundContext.createBufferSource();
         const gain = hitsoundContext.createGain();
-        gain.gain.value = clamp(volume, 0, 1) * 0.72;
+        const masterGain = clamp(Number(hitsoundVolume.value) || 0, 0, 300) / 100;
+        gain.gain.value = clamp(volume, 0, 1) * masterGain;
         source.buffer = buffer;
         source.connect(gain);
         gain.connect(hitsoundContext.destination);
@@ -842,6 +845,11 @@
         resetHitsoundCursor(audio.currentTime * 1_000);
         try { localStorage.setItem('inpaint.previewHitsounds', hitsoundsEnabled.checked ? 'true' : 'false'); } catch (_) {}
     });
+    hitsoundVolume.addEventListener('input', () => {
+        const value = Math.round(clamp(Number(hitsoundVolume.value) || 0, 0, 300));
+        hitsoundVolumeValue.textContent = `${value}%`;
+        try { localStorage.setItem('inpaint.previewHitsoundVolume', String(value)); } catch (_) {}
+    });
 
     document.addEventListener('keydown', (event) => {
         const tag = event.target?.tagName?.toLowerCase();
@@ -877,7 +885,12 @@
         if (saved !== null) autoPlayUpdates.checked = saved === 'true';
         const savedHitsounds = localStorage.getItem('inpaint.previewHitsounds');
         if (savedHitsounds !== null) hitsoundsEnabled.checked = savedHitsounds === 'true';
+        const savedHitsoundVolume = Number(localStorage.getItem('inpaint.previewHitsoundVolume'));
+        if (Number.isFinite(savedHitsoundVolume) && savedHitsoundVolume >= 0) {
+            hitsoundVolume.value = String(clamp(savedHitsoundVolume, 0, 300));
+        }
     } catch (_) {}
+    hitsoundVolumeValue.textContent = `${Math.round(Number(hitsoundVolume.value))}%`;
     updatePlayButton();
     resizeCanvases();
     window.requestAnimationFrame(animationFrame);

@@ -186,6 +186,37 @@ class BeatmapsetSessionTests(unittest.TestCase):
                 self.assertEqual("Expert Modified", reopened.select_difficulty("Expert.osu").version)
                 self.assertTrue(reopened.resolve_audio().is_file())
 
+    def test_song_folder_is_copied_and_source_remains_immutable(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            source = root / "Artist - Song"
+            source.mkdir()
+            entries = normal_entries()
+            for relative_name, content in entries.items():
+                path = source / relative_name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+
+            with BeatmapsetSession.open(source, temp_root=root / "sessions") as session:
+                self.assertEqual(2, len(session.difficulties))
+                self.assertNotEqual(source, session.working_directory)
+                before = (source / "Expert.osu").read_bytes()
+                session.active_difficulty.path.write_bytes(
+                    session.active_difficulty.path.read_bytes().replace(b"Version:Expert", b"Version:Changed")
+                )
+                session.record_revision(metadata={"kind": "generation", "difficulty": 10, "seed": 42,
+                                                  "descriptors": ["skillset/streams", "streams/stamina"]})
+                self.assertEqual(before, (source / "Expert.osu").read_bytes())
+                self.assertTrue(session.source_is_unchanged())
+
+                name = session.suggested_export_name()
+                self.assertIn("10.0star", name)
+                self.assertIn("__R001__seed-42__streams+stamina.osz", name)
+                first = session.next_export_path(root / "outputs")
+                first.parent.mkdir(parents=True)
+                first.touch()
+                self.assertTrue(session.next_export_path(root / "outputs").stem.endswith("__02"))
+
     def test_revision_history_undo_redo_and_branching_only_version_osu_content(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
