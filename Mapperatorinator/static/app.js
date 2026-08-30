@@ -1602,7 +1602,8 @@ $(document).ready(function() {
     const InpaintManager = {
         session: null,
         busy: false,
-        previewing: false,
+        previewChannel: null,
+        previewSyncTimer: null,
 
         init() {
             $('#inpaint-open-button').on('click', () => this.open());
@@ -1613,19 +1614,41 @@ $(document).ready(function() {
             $('#inpaint-undo-button').on('click', () => this.changeRevision('undo'));
             $('#inpaint-redo-button').on('click', () => this.changeRevision('redo'));
             $('#inpaint-random-seed').on('click', () => this.randomizeSeed());
-            $('#inpaint-preview-button').on('click', () => this.preview());
+            $('#inpaint-preview-button').on('click', () => this.openPreviewWindow());
             $('#inpaint_model').on('change', () => this.updateModelControls());
-            $('#inpaint_preview_padding_before, #inpaint_preview_padding_after').on('change', () => {
-                this.savePreviewPadding();
-            });
+            $('#inpaint_start_time, #inpaint_end_time, #inpaint_preview_padding_before, #inpaint_preview_padding_after')
+                .on('change', () => {
+                    this.savePreviewPadding();
+                    clearTimeout(this.previewSyncTimer);
+                    this.previewSyncTimer = setTimeout(() => this.syncPreviewConfig(), 120);
+                });
             window.addEventListener('beforeunload', (event) => {
                 if (!this.session?.dirty) return;
                 event.preventDefault();
                 event.returnValue = '';
             });
             this.loadPreviewPadding();
+            this.initializePreviewChannel();
             this.renderPreviewStatus();
             this.updateModelControls();
+        },
+
+        initializePreviewChannel() {
+            if (typeof BroadcastChannel !== 'function') return;
+            this.previewChannel = new BroadcastChannel('mapperatorinpainter-preview');
+            this.previewChannel.onmessage = (event) => {
+                const message = event.data || {};
+                if (!this.session || message.sessionId !== this.session.session_id) return;
+                if (message.type === 'selection') {
+                    $('#inpaint_start_time').val(this.formatTimestamp(message.startTime)).data('user-edited', true);
+                    $('#inpaint_end_time').val(this.formatTimestamp(message.endTime)).data('user-edited', true);
+                    this.syncPreviewConfig();
+                } else if (message.type === 'regenerate' && !this.busy) {
+                    $('#inpaintForm').trigger('submit');
+                } else if ((message.type === 'undo' || message.type === 'redo') && !this.busy) {
+                    this.changeRevision(message.type);
+                }
+            };
         },
 
         loadPreviewPadding() {
@@ -1652,11 +1675,11 @@ $(document).ready(function() {
             const danser = window.APP_BOOTSTRAP?.danserStatus || {};
             let text = message;
             if (!text && this.session && this.session.active_difficulty?.mode !== 0) {
-                text = 'Unavailable for this mode; Danser supports osu!standard only.';
+                text = 'Instant preview currently supports osu!standard only.';
             } else if (!text && danser.available) {
-                text = `Danser ${danser.version} ready`;
+                text = `Instant preview ready · Danser ${danser.version} available for fidelity checks`;
             } else if (!text) {
-                text = `Danser ${danser.version || '0.11.0'} not installed — run Install Danser Preview.bat`;
+                text = 'Instant preview ready · Danser is optional';
             }
             $('#inpaint-preview-status').text(text);
         },
@@ -1680,19 +1703,19 @@ $(document).ready(function() {
 
         setBusy(busy) {
             this.busy = busy;
-            $('#inpaint-generate-button').prop('disabled', busy || this.previewing || !this.session)
+            $('#inpaint-generate-button').prop('disabled', busy || !this.session)
                 .text(busy ? 'Regenerating…' : 'Regenerate interval');
-            $('#inpaint-open-button').prop('disabled', busy || this.previewing);
-            $('#inpaint_difficulty').prop('disabled', busy || this.previewing || !this.session);
-            $('#inpaint-export-button').prop('disabled', busy || this.previewing || !this.session);
-            $('#inpaint-close-button').prop('disabled', busy || this.previewing || !this.session);
+            $('#inpaint-open-button').prop('disabled', busy);
+            $('#inpaint_difficulty').prop('disabled', busy || !this.session);
+            $('#inpaint-export-button').prop('disabled', busy || !this.session);
+            $('#inpaint-close-button').prop('disabled', busy || !this.session);
             $('#inpaint-preview-button')
-                .prop('disabled', busy || this.previewing || !this.session || this.session?.active_difficulty?.mode !== 0)
-                .text(this.previewing ? 'Launching Danser…' : 'Preview in Danser');
+                .prop('disabled', !this.session)
+                .text('Open Preview');
             const revisions = this.session?.revisions;
-            $('#inpaint-undo-button').prop('disabled', busy || this.previewing || !revisions?.can_undo);
-            $('#inpaint-redo-button').prop('disabled', busy || this.previewing || !revisions?.can_redo);
-            $('#inpaint-random-seed').prop('disabled', busy || this.previewing);
+            $('#inpaint-undo-button').prop('disabled', busy || !revisions?.can_undo);
+            $('#inpaint-redo-button').prop('disabled', busy || !revisions?.can_redo);
+            $('#inpaint-random-seed').prop('disabled', busy);
         },
 
         request(url, data) {
@@ -1758,6 +1781,7 @@ $(document).ready(function() {
             $('#inpaint_start_time, #inpaint_end_time').off('input.inpaint').on('input.inpaint', function() {
                 $(this).data('user-edited', true);
             });
+            this.syncPreviewConfig();
             this.setBusy(false);
         },
 
@@ -1846,29 +1870,40 @@ $(document).ready(function() {
             }
         },
 
-        async preview() {
-            if (!this.session || this.busy || this.previewing) return;
-            this.previewing = true;
-            this.setBusy(this.busy);
+        async syncPreviewConfig(showError = false) {
+            if (!this.session) return false;
             this.savePreviewPadding();
             try {
-                const response = await this.request('/inpaint/preview', {
+                const response = await this.request('/inpaint/preview-window/config', {
                     session_id: this.session.session_id,
                     start_time: $('#inpaint_start_time').val(),
                     end_time: $('#inpaint_end_time').val(),
                     padding_before: $('#inpaint_preview_padding_before').val(),
                     padding_after: $('#inpaint_preview_padding_after').val()
                 });
-                const range = `${this.formatTimestamp(response.start_time)}–${this.formatTimestamp(response.end_time)}`;
-                this.renderPreviewStatus(`${response.viewer} · ${response.difficulty} · ${range}`);
-                Utils.showFlashMessage(`Previewing ${range} in ${response.viewer}.`);
+                $('#inpaint_start_time').val(this.formatTimestamp(response.selection.start_time));
+                $('#inpaint_end_time').val(this.formatTimestamp(response.selection.end_time));
+                return true;
             } catch (error) {
-                const message = error.responseJSON?.message || 'Could not launch Danser preview.';
-                this.renderPreviewStatus(message);
-                Utils.showFlashMessage(message, 'error');
-            } finally {
-                this.previewing = false;
-                this.setBusy(this.busy);
+                const message = error.responseJSON?.message || 'Could not synchronize preview settings.';
+                if (showError) Utils.showFlashMessage(message, 'error');
+                return false;
+            }
+        },
+
+        async openPreviewWindow() {
+            if (!this.session) return;
+            if (!(await this.syncPreviewConfig(true))) return;
+            try {
+                if (window.pywebview?.api?.open_preview_window) {
+                    const result = await window.pywebview.api.open_preview_window();
+                    if (result?.status === 'error') throw new Error(result.message);
+                } else {
+                    window.open('/inpaint/preview-window', 'mapperatorinpainter-preview', 'width=1120,height=900,resizable=yes');
+                }
+                this.renderPreviewStatus('Preview window open · changes reload automatically');
+            } catch (error) {
+                Utils.showFlashMessage(error.message || 'Could not open the preview window.', 'error');
             }
         },
 

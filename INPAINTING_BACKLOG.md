@@ -559,6 +559,12 @@ playback begins just before changed section
 
 That's the payoff.
 
+**Status:** Complete for M6 through the persistent embedded preview. New
+revisions reload immediately without restarting the audio/player; after the
+user has initiated audio once, the optional auto-play setting returns to the
+padded regeneration start and resumes playback. Danser remains a separate
+high-fidelity check because it cannot be live-retargeted.
+
 ## Phase 9 — Better interval selection
 
 Only after basic start/end fields work.
@@ -577,9 +583,10 @@ Potentially show hitobject density:
                     selection
 ```
 
-- [ ] Seek position.
+- [x] Seek position.
 - [ ] Drag range.
-- [ ] Numeric start/end stay synchronized.
+- [x] Numeric start/end stay synchronized through Copy to Start/End and the
+  persistent preview controller.
 
 ### 9.2 Keyboard range selection
 
@@ -600,6 +607,11 @@ Ctrl+Shift+Z = redo
 ```
 
 Don't hijack keys while typing into text fields.
+
+**Status:** Complete for M6. The preview implements Space, R, Ctrl+Z,
+Ctrl+Shift+Z, `[`, and `]`, and ignores shortcuts while form controls have
+focus. Timeline pointer dragging scrubs the playhead; direct drag-to-select
+remains open because the copy-boundary workflow is the current range selector.
 
 ## Phase 10 — Generate → Inpaint handoff
 
@@ -696,6 +708,10 @@ Treat these as hard stopping points rather than trying to implement the entire b
 **Status:** Complete (2026-08-30). See `M5_DANSER_PREVIEW_PROOF.md`.
 
 **M6 — Fast workflow:** automatic preview/reload, timeline selection, keyboard shortcuts.
+
+**Status:** Complete (2026-08-31). See `M6_FAST_PREVIEW_PROOF.md`. The timeline
+uses copy-at-playhead boundary selection; free drag-to-select remains a possible
+future refinement.
 
 **M7 — Unified workflow:** Generate → Open in Inpaint → iterate → Export.
 

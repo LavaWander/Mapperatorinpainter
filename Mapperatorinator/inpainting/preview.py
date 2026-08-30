@@ -42,6 +42,9 @@ class Previewer(Protocol):
     def close(self) -> None:
         ...
 
+    def stop(self) -> None:
+        ...
+
 
 def find_danser_executable(project_root: str | Path) -> Path | None:
     """Find the dedicated Danser CLI without consulting a normal Danser install."""
@@ -256,6 +259,12 @@ class DanserPreviewer:
             if preview_root.name.startswith("preview-") and preview_root.is_dir():
                 shutil.rmtree(preview_root, ignore_errors=True)
             self._closed = True
+
+    def stop(self) -> None:
+        """Stop the current renderer while retaining this session's staging area."""
+        with self._lock:
+            if not self._closed:
+                self._stop_process()
 
     def __enter__(self) -> "DanserPreviewer":
         return self

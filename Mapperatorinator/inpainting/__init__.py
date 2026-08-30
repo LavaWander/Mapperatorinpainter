@@ -25,6 +25,12 @@ from .preview import (
     Previewer,
     find_danser_executable,
 )
+from .preview_window import (
+    PreviewWindowController,
+    PreviewWindowSnapshot,
+    hitobject_density,
+    preview_map_data,
+)
 
 __all__ = [
     "AssetResolutionError",
@@ -40,10 +46,14 @@ __all__ = [
     "PreviewError",
     "PreviewLaunch",
     "Previewer",
+    "PreviewWindowController",
+    "PreviewWindowSnapshot",
     "UnsafeArchiveError",
     "build_inpainting_config",
     "generation_revision_metadata",
     "regenerate_interval",
     "restore_snapshot",
     "find_danser_executable",
+    "hitobject_density",
+    "preview_map_data",
 ]

@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Mapperatorinpainter Preview</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='preview.css') }}" />
+</head>
+<body>
+    <main class="preview-app">
+        <header class="preview-header">
+            <div>
+                <p class="eyebrow">Mapperatorinpainter · instant preview</p>
+                <h1 id="map-title">Preview</h1>
+                <p id="map-subtitle">Open a beatmapset in the Inpaint tab.</p>
+            </div>
+            <span id="connection-status" class="status-pill waiting">Waiting for map</span>
+        </header>
+
+        <section class="playfield-card" aria-label="Beatmap preview">
+            <canvas id="playfield" aria-label="osu!standard playfield preview"></canvas>
+            <div id="playfield-empty">Open a supported difficulty to preview it.</div>
+        </section>
+
+        <section class="transport-card" aria-label="Playback controls">
+            <div class="transport-row">
+                <button type="button" id="play-pause-button" class="play-button" disabled>Play</button>
+                <button type="button" id="jump-selection-button" class="secondary" disabled>Selection start</button>
+                <output id="cursor-time">00:00.000</output>
+                <span class="time-separator">/</span>
+                <output id="map-length">00:00.000</output>
+                <label class="toggle"><input type="checkbox" id="auto-play-updates" checked /> Play changed versions</label>
+            </div>
+            <audio id="preview-audio" preload="auto"></audio>
+        </section>
+
+        <section class="timeline-card" aria-labelledby="timeline-title">
+            <div class="timeline-heading">
+                <div>
+                    <p class="eyebrow" id="timeline-title">Map timeline</p>
+                    <p class="timeline-help">Click or drag across the note-density waveform for instant seeking.</p>
+                </div>
+                <output id="object-count">— objects</output>
+            </div>
+
+            <div class="timeline-wrap">
+                <canvas id="density-timeline" tabindex="0" role="slider" aria-label="Preview seek position"
+                    aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"></canvas>
+                <div id="timeline-empty">No beatmap loaded</div>
+            </div>
+
+            <div class="selection-readout">
+                <span>Regeneration range</span>
+                <strong id="selection-range">00:00.000–00:10.000</strong>
+            </div>
+
+            <div class="copy-actions">
+                <button type="button" id="copy-start-button" disabled>Copy to Start</button>
+                <button type="button" id="copy-end-button" disabled>Copy to End</button>
+            </div>
+        </section>
+
+        <section class="danser-card" aria-labelledby="danser-title">
+            <div>
+                <p class="eyebrow" id="danser-title">High-fidelity check</p>
+                <p id="danser-status">Danser is optional; the embedded preview works without it.</p>
+            </div>
+            <div class="danser-actions">
+                <button type="button" id="danser-button" disabled>Open cursor in Danser</button>
+                <button type="button" id="stop-danser-button" class="secondary" disabled>Stop Danser</button>
+            </div>
+        </section>
+
+        <footer class="shortcut-hint">
+            <span><kbd>Space</kbd> Play/pause</span>
+            <span><kbd>[</kbd> Copy to Start</span>
+            <span><kbd>]</kbd> Copy to End</span>
+            <span><kbd>R</kbd> Regenerate</span>
+            <span><kbd>Ctrl</kbd>+<kbd>Z</kbd> Undo</span>
+            <span><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> Redo</span>
+        </footer>
+    </main>
+
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script>
+        window.PREVIEW_BOOTSTRAP = {
+            csrfToken: {{ csrf_token | tojson }},
+            csrfHeaderName: {{ csrf_header_name | tojson }},
+            danserStatus: {{ danser_status | tojson }}
+        };
+    </script>
+    <script src="{{ url_for('static', filename='preview.js') }}"></script>
+</body>
+</html>

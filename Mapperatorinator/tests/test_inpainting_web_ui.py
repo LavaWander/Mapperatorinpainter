@@ -70,6 +70,9 @@ class InpaintWebUiTests(unittest.TestCase):
             self.web_ui.inpaint_sessions.clear()
         for session in sessions:
             session.cleanup()
+        snapshot = self.web_ui.preview_window_controller.snapshot()
+        if snapshot.session_id:
+            self.web_ui.preview_window_controller.clear_session(snapshot.session_id)
         self.temporary_directory.cleanup()
 
     def post(self, path: str, data: dict):
@@ -202,6 +205,98 @@ class InpaintWebUiTests(unittest.TestCase):
             "inpaint_preview_padding_before",
             "inpaint_preview_padding_after",
             "inpaint-preview-status",
+        ):
+            self.assertIn(f'id="{control_id}"', html)
+
+    def test_persistent_preview_state_follows_revision_and_copies_boundaries(self) -> None:
+        opened = self.post("/inpaint/open", {"path": str(self.source)})
+        session_id = opened.get_json()["session"]["session_id"]
+        configured = self.post("/inpaint/preview-window/config", {
+            "session_id": session_id,
+            "start_time": "00:02.000",
+            "end_time": "00:04.000",
+            "padding_before": "1",
+            "padding_after": "2",
+        })
+        self.assertEqual(200, configured.status_code)
+
+        first_state = self.post("/inpaint/preview-window/state", {}).get_json()
+        self.assertTrue(first_state["has_session"])
+        self.assertEqual(0, first_state["map"]["mode"])
+        self.assertGreater(first_state["map"]["object_count"], 0)
+        self.assertEqual(240, len(first_state["map"]["density"]))
+        first_key = first_state["map"]["key"]
+
+        scene_response = self.post("/inpaint/preview-window/data", {"key": first_key})
+        self.assertEqual(200, scene_response.status_code)
+        scene = scene_response.get_json()["scene"]
+        self.assertEqual(first_state["map"]["object_count"], len(scene["objects"]))
+        self.assertIn("slider", {item["type"] for item in scene["objects"]})
+
+        audio_response = self.client.get(first_state["map"]["audio_url"])
+        self.assertEqual(200, audio_response.status_code)
+        self.assertEqual(b"RIFF-test-audio", audio_response.data)
+        audio_response.close()
+        range_response = self.client.get(
+            first_state["map"]["audio_url"],
+            headers={"Range": "bytes=0-3"},
+        )
+        self.assertEqual(206, range_response.status_code)
+        self.assertEqual(b"RIFF", range_response.data)
+        range_response.close()
+
+        copied = self.post("/inpaint/preview-window/selection", {
+            "boundary": "start",
+            "cursor": "3000",
+        }).get_json()["selection"]
+        self.assertEqual(3_000, copied["start_time"])
+
+        session = self.web_ui._get_inpaint_session(session_id)
+        path = session.active_difficulty.path
+        path.write_bytes(path.read_bytes().replace(b"Version:Expert", b"Version:Changed"))
+        session.record_revision(metadata={"kind": "generation", "seed": 6})
+        changed_state = self.post("/inpaint/preview-window/state", {}).get_json()
+        self.assertNotEqual(first_key, changed_state["map"]["key"])
+
+    def test_persistent_preview_play_uses_cursor_to_map_end(self) -> None:
+        opened = self.post("/inpaint/open", {"path": str(self.source)})
+        session_id = opened.get_json()["session"]["session_id"]
+        self.post("/inpaint/preview-window/config", {
+            "session_id": session_id,
+            "start_time": "0",
+            "end_time": "4",
+        })
+        session = self.web_ui._get_inpaint_session(session_id)
+
+        class FakePreviewer:
+            def __init__(self):
+                self.calls = []
+
+            def preview(self, beatmap_path, start_time, end_time):
+                self.calls.append((Path(beatmap_path), start_time, end_time))
+                return PreviewLaunch(Path(beatmap_path), start_time, end_time, 4321, "Danser 0.11.0")
+
+        previewer = FakePreviewer()
+        with patch.object(self.web_ui, "_get_inpaint_previewer", return_value=previewer):
+            played = self.post("/inpaint/preview-window/play", {"cursor": "2500"})
+
+        self.assertEqual(200, played.status_code)
+        self.assertEqual(2_500, previewer.calls[0][1])
+        self.assertEqual(session.active_difficulty.length_ms + 1, previewer.calls[0][2])
+
+    def test_m6_preview_window_controls_are_rendered(self) -> None:
+        response = self.client.get("/inpaint/preview-window")
+        self.assertEqual(200, response.status_code)
+        html = response.get_data(as_text=True)
+        for control_id in (
+            "playfield",
+            "play-pause-button",
+            "density-timeline",
+            "cursor-time",
+            "copy-start-button",
+            "copy-end-button",
+            "auto-play-updates",
+            "danser-button",
         ):
             self.assertIn(f'id="{control_id}"', html)
 

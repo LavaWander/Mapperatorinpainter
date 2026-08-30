@@ -21,6 +21,7 @@ from typing import Callable, Any, Tuple, Dict
 
 import io
 import hmac
+import hashlib
 import multiprocessing as mp
 import queue as queue_mod
 import datetime
@@ -29,7 +30,7 @@ import time
 
 import webview
 import werkzeug.serving
-from flask import Flask, render_template, request, Response, jsonify
+from flask import Flask, render_template, request, Response, jsonify, send_file, url_for
 
 from utils import routed_pickle
 from config import InferenceConfig
@@ -38,6 +39,7 @@ from osuT5.osuT5.inference.server import InferenceClient
 from osuT5.osuT5.utils import load_model_loaders
 from inference import compile_args, get_server_address, main, should_load_separate_timing_model
 from inpainting.preview import DANSER_VERSION, DanserPreviewer, PreviewError, find_danser_executable
+from inpainting.preview_window import PreviewWindowController, preview_map_data
 from inpainting.session import BeatmapsetSession
 from inpainting.ui import compose_inpainting_config, parse_timestamp_ms, session_payload
 from inpainting.workflow import generation_revision_metadata, regenerate_interval, restore_snapshot
@@ -170,6 +172,12 @@ CSRF_PROTECTED_ENDPOINTS = {
     'export_inpaint_session',
     'close_inpaint_session',
     'preview_inpaint_session',
+    'configure_inpaint_preview_window',
+    'get_inpaint_preview_window_state',
+    'get_inpaint_preview_window_data',
+    'play_inpaint_preview_window',
+    'copy_inpaint_preview_boundary',
+    'stop_inpaint_preview_window',
 }
 
 
@@ -291,6 +299,41 @@ class Api:
         # FOLDER_DIALOG also returns a tuple containing the path
         return parse_file_dialog_result(result)
 
+    def open_preview_window(self):
+        """Create or focus the persistent Inpaint preview controller window."""
+        global preview_control_window
+
+        if not application_base_url:
+            return {"status": "error", "message": "The application URL is not ready."}
+
+        with preview_control_window_lock:
+            if preview_control_window is not None:
+                try:
+                    preview_control_window.restore()
+                    preview_control_window.show()
+                    return {"status": "focused"}
+                except Exception:
+                    preview_control_window = None
+
+            try:
+                window = webview.create_window(
+                    "Mapperatorinpainter Preview",
+                    url=f"{application_base_url}inpaint/preview-window",
+                    width=1120,
+                    height=900,
+                    min_size=(760, 620),
+                    resizable=True,
+                    background_color="#111318",
+                )
+                if window is None:
+                    raise RuntimeError("pywebview did not create the preview window.")
+                preview_control_window = window
+                window.events.closed += _on_preview_control_window_closed
+                return {"status": "opened"}
+            except Exception as exc:
+                traceback.print_exc()
+                return {"status": "error", "message": str(exc)}
+
 
 # --- Shared State for Inference Processes ---
 # Track inference workers (multiprocessing) instead of Popen
@@ -304,6 +347,12 @@ inpaint_sessions = {}
 inpaint_sessions_lock = threading.Lock()
 inpaint_previewers = {}
 inpaint_previewers_lock = threading.Lock()
+preview_window_controller = PreviewWindowController()
+preview_density_cache = {}
+preview_density_cache_lock = threading.Lock()
+preview_control_window = None
+preview_control_window_lock = threading.Lock()
+application_base_url = None
 shutdown_lock = threading.Lock()
 shutdown_started = False
 
@@ -418,6 +467,27 @@ def _close_inpaint_previewer(session_id: str) -> None:
         previewer.close()
 
 
+def _on_preview_control_window_closed(*_args) -> None:
+    global preview_control_window
+    with preview_control_window_lock:
+        preview_control_window = None
+    snapshot = preview_window_controller.snapshot()
+    if snapshot.session_id:
+        _close_inpaint_previewer(snapshot.session_id)
+
+
+def _destroy_preview_control_window() -> None:
+    global preview_control_window
+    with preview_control_window_lock:
+        window = preview_control_window
+        preview_control_window = None
+    if window is not None:
+        try:
+            window.destroy()
+        except Exception:
+            pass
+
+
 def _shutdown_inpaint_previewers() -> None:
     with inpaint_previewers_lock:
         previewers = list(inpaint_previewers.values())
@@ -438,6 +508,7 @@ def _shutdown_application_resources():
         shutdown_started = True
 
     _shutdown_inference_processes()
+    _destroy_preview_control_window()
     _shutdown_inpaint_previewers()
     with inpaint_sessions_lock:
         sessions = list(inpaint_sessions.values())
@@ -601,6 +672,65 @@ def _get_inpaint_previewer(session_id: str, session: BeatmapsetSession) -> Danse
         return previewer
 
 
+def _preview_selection_payload(snapshot) -> dict:
+    return {
+        "session_id": snapshot.session_id,
+        "start_time": snapshot.selection_start,
+        "end_time": snapshot.selection_end,
+        "padding_before": snapshot.padding_before,
+        "padding_after": snapshot.padding_after,
+        "cursor": snapshot.cursor,
+        "configuration_revision": snapshot.configuration_revision,
+    }
+
+
+def _preview_map_cache_entry(session_id: str, session: BeatmapsetSession) -> tuple[str, dict]:
+    difficulty = session.active_difficulty
+    if difficulty.length_ms is None or difficulty.length_ms <= 0:
+        raise ValueError("The active difficulty has no playable hitobjects to preview.")
+    revision = session.revision_payload()["current_revision"]
+    map_key = f"{session_id}:{difficulty.relative_path}:{revision}"
+    with preview_density_cache_lock:
+        cached = preview_density_cache.get(map_key)
+    if cached is None:
+        cached = preview_map_data(difficulty.path, difficulty.length_ms)
+        with preview_density_cache_lock:
+            preview_density_cache[map_key] = cached
+    return map_key, cached
+
+
+def _preview_audio_key(session: BeatmapsetSession) -> str:
+    audio_path = session.resolve_audio()
+    stat = audio_path.stat()
+    relative_path = audio_path.relative_to(session.working_directory).as_posix()
+    identity = f"{relative_path}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")
+    return hashlib.sha256(identity).hexdigest()[:16]
+
+
+def _preview_map_payload(session_id: str, session: BeatmapsetSession) -> dict:
+    difficulty = session.active_difficulty
+    map_key, cached = _preview_map_cache_entry(session_id, session)
+    metadata = cached["metadata"]
+
+    return {
+        "key": map_key,
+        "relative_path": difficulty.relative_path,
+        "version": difficulty.version,
+        "mode": difficulty.mode,
+        "length_ms": difficulty.length_ms,
+        "title": metadata["title"],
+        "artist": metadata["artist"],
+        "mapper": difficulty.mapper,
+        "density": cached["density"],
+        "object_count": cached["object_count"],
+        "audio_url": url_for(
+            "inpaint_preview_audio",
+            session_id=session_id,
+            key=_preview_audio_key(session),
+        ),
+    }
+
+
 # --- Flask Routes ---
 
 @app.route('/')
@@ -617,6 +747,21 @@ def index():
             'available': danser_executable is not None,
             'version': DANSER_VERSION,
             'path': str(danser_executable) if danser_executable else None,
+        },
+    )
+
+
+@app.route('/inpaint/preview-window')
+def inpaint_preview_window():
+    """Render the persistent preview controller and density seeker."""
+    danser_executable = find_danser_executable(Path(script_dir).parent)
+    return render_template(
+        'preview.html',
+        csrf_token=LOCAL_UI_CSRF_TOKEN,
+        csrf_header_name=CSRF_HEADER_NAME,
+        danser_status={
+            'available': danser_executable is not None,
+            'version': DANSER_VERSION,
         },
     )
 
@@ -946,6 +1091,192 @@ def preview_inpaint_session():
         return jsonify({"status": "error", "message": f"Could not launch preview: {exc}"}), 500
 
 
+@app.route('/inpaint/preview-window/config', methods=['POST'])
+def configure_inpaint_preview_window():
+    """Synchronize editor selection with the persistent preview controller."""
+    session_id = (request.form.get('session_id') or '').strip()
+    try:
+        session = _get_inpaint_session(session_id)
+        start = parse_timestamp_ms(request.form.get('start_time') or '')
+        end = parse_timestamp_ms(request.form.get('end_time') or '')
+        if end <= start:
+            raise ValueError("Preview end time must be after its start time.")
+        padding_before = round(float(request.form.get('padding_before') or '3') * 1_000)
+        padding_after = round(float(request.form.get('padding_after') or '3') * 1_000)
+        previous_session_id = preview_window_controller.snapshot().session_id
+        snapshot = preview_window_controller.configure(
+            session_id=session_id,
+            selection_start=start,
+            selection_end=end,
+            padding_before=padding_before,
+            padding_after=padding_after,
+            length_ms=session.active_difficulty.length_ms,
+        )
+        if previous_session_id and previous_session_id != session_id:
+            _close_inpaint_previewer(previous_session_id)
+        return jsonify({"status": "success", "selection": _preview_selection_payload(snapshot)})
+    except (ValueError, PreviewError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/inpaint/preview-window/state', methods=['POST'])
+def get_inpaint_preview_window_state():
+    """Return current map/revision data for the persistent preview window."""
+    snapshot = preview_window_controller.snapshot()
+    if not snapshot.session_id:
+        return jsonify({
+            "status": "success",
+            "has_session": False,
+            "selection": _preview_selection_payload(snapshot),
+            "danser_available": find_danser_executable(Path(script_dir).parent) is not None,
+        })
+
+    try:
+        session = _get_inpaint_session(snapshot.session_id)
+    except ValueError:
+        cleared = preview_window_controller.clear_session(snapshot.session_id)
+        return jsonify({
+            "status": "success",
+            "has_session": False,
+            "selection": _preview_selection_payload(cleared),
+            "danser_available": find_danser_executable(Path(script_dir).parent) is not None,
+        })
+
+    try:
+        length_ms = session.active_difficulty.length_ms
+        if length_ms is not None and (
+            snapshot.selection_start >= length_ms or snapshot.selection_end > length_ms
+        ):
+            snapshot = preview_window_controller.configure(
+                session_id=snapshot.session_id,
+                selection_start=snapshot.selection_start,
+                selection_end=snapshot.selection_end,
+                padding_before=snapshot.padding_before,
+                padding_after=snapshot.padding_after,
+                length_ms=length_ms,
+            )
+        return jsonify({
+            "status": "success",
+            "has_session": True,
+            "selection": _preview_selection_payload(snapshot),
+            "map": _preview_map_payload(snapshot.session_id, session),
+            "generating": _session_has_active_job(snapshot.session_id),
+            "danser_available": find_danser_executable(Path(script_dir).parent) is not None,
+        })
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/inpaint/preview-window/data', methods=['POST'])
+def get_inpaint_preview_window_data():
+    """Return parsed playfield data only when the preview's map revision changes."""
+    snapshot = preview_window_controller.snapshot()
+    try:
+        if not snapshot.session_id:
+            raise ValueError("Open a beatmapset in Inpaint first.")
+        session = _get_inpaint_session(snapshot.session_id)
+        map_key, cached = _preview_map_cache_entry(snapshot.session_id, session)
+        requested_key = (request.form.get('key') or '').strip()
+        if requested_key and requested_key != map_key:
+            raise ValueError("The active map changed while the preview was loading. Please retry.")
+        return jsonify({
+            "status": "success",
+            "key": map_key,
+            "scene": cached["scene"],
+        })
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 409
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/inpaint/preview-window/audio/<session_id>')
+def inpaint_preview_audio(session_id: str):
+    """Stream only the selected difficulty's resolved audio to the embedded player."""
+    snapshot = preview_window_controller.snapshot()
+    try:
+        if snapshot.session_id != session_id:
+            raise ValueError("This preview session is no longer active.")
+        session = _get_inpaint_session(session_id)
+        if request.args.get('key') != _preview_audio_key(session):
+            raise ValueError("This preview audio URL is stale.")
+        return send_file(session.resolve_audio(), conditional=True, max_age=0)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+
+
+@app.route('/inpaint/preview-window/play', methods=['POST'])
+def play_inpaint_preview_window():
+    """Launch the optional high-fidelity Danser check at the preview cursor."""
+    snapshot = preview_window_controller.snapshot()
+    try:
+        if not snapshot.session_id:
+            raise ValueError("Open a beatmapset in Inpaint first.")
+        session = _get_inpaint_session(snapshot.session_id)
+        if _session_has_active_job(snapshot.session_id):
+            raise ValueError("Wait for regeneration to finish before previewing.")
+        if session.active_difficulty.mode != 0:
+            raise ValueError("Danser previews support only osu!standard difficulties (mode 0).")
+        length_ms = session.active_difficulty.length_ms
+        if length_ms is None or length_ms <= 0:
+            raise ValueError("The active difficulty has no playable hitobjects to preview.")
+        cursor = int(request.form.get('cursor') or snapshot.cursor)
+        cursor = max(0, min(cursor, length_ms - 1))
+        previewer = _get_inpaint_previewer(snapshot.session_id, session)
+        launched = previewer.preview(
+            session.active_difficulty.path,
+            cursor,
+            length_ms + 1,
+        )
+        snapshot = preview_window_controller.set_cursor(cursor, length_ms=length_ms)
+        return jsonify({
+            "status": "success",
+            "viewer": launched.viewer,
+            "process_id": launched.process_id,
+            "cursor": snapshot.cursor,
+            "difficulty": session.active_difficulty.version,
+        })
+    except (ValueError, PreviewError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+    except Exception as exc:
+        traceback.print_exc()
+        return jsonify({"status": "error", "message": f"Could not launch preview: {exc}"}), 500
+
+
+@app.route('/inpaint/preview-window/selection', methods=['POST'])
+def copy_inpaint_preview_boundary():
+    """Copy the preview cursor into the editor's regeneration start or end."""
+    snapshot = preview_window_controller.snapshot()
+    try:
+        if not snapshot.session_id:
+            raise ValueError("Open a beatmapset in Inpaint first.")
+        session = _get_inpaint_session(snapshot.session_id)
+        length_ms = session.active_difficulty.length_ms
+        if length_ms is None:
+            raise ValueError("The active difficulty has no playable hitobjects.")
+        boundary = (request.form.get('boundary') or '').strip().lower()
+        timestamp = int(request.form.get('cursor') or snapshot.cursor)
+        updated = preview_window_controller.copy_boundary(
+            boundary,
+            timestamp,
+            length_ms=length_ms,
+        )
+        return jsonify({"status": "success", "selection": _preview_selection_payload(updated)})
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/inpaint/preview-window/stop', methods=['POST'])
+def stop_inpaint_preview_window():
+    snapshot = preview_window_controller.snapshot()
+    if snapshot.session_id:
+        with inpaint_previewers_lock:
+            previewer = inpaint_previewers.get(snapshot.session_id)
+        if previewer is not None:
+            previewer.stop()
+    return jsonify({"status": "success"})
+
+
 @app.route('/inpaint/state', methods=['POST'])
 def inpaint_session_state():
     session_id = (request.form.get('session_id') or '').strip()
@@ -999,6 +1330,11 @@ def close_inpaint_session():
             session = inpaint_sessions.pop(session_id, None)
         if session is not None:
             _close_inpaint_previewer(session_id)
+            preview_window_controller.clear_session(session_id)
+            with preview_density_cache_lock:
+                stale_keys = [key for key in preview_density_cache if key.startswith(f"{session_id}:")]
+                for key in stale_keys:
+                    preview_density_cache.pop(key, None)
             session.cleanup()
         return jsonify({"status": "success"})
     except Exception as exc:
@@ -1397,6 +1733,7 @@ if __name__ == '__main__':
     # Create the pywebview window pointing to the Flask server
     window_title = 'Mapperatorinator'
     flask_url = f'http://127.0.0.1:{flask_port}/'
+    application_base_url = flask_url
 
     # Instantiate the API class (doesn't need window object anymore)
     api = Api()
