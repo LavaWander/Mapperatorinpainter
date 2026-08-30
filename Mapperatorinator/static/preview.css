@@ -47,7 +47,7 @@ button:hover:not(:disabled) { filter: brightness(1.08); }
 button:disabled { cursor: default; opacity: 0.42; }
 
 .preview-app {
-    width: min(1120px, 100%);
+    width: min(1320px, 100%);
     margin: 0 auto;
     padding: 24px;
     display: grid;
@@ -105,7 +105,7 @@ p { margin: 0; }
     overflow: hidden;
     border: 1px solid #252b36;
     border-radius: 14px;
-    min-height: 360px;
+    min-height: 520px;
     aspect-ratio: 16 / 9;
     background: #07090d;
     box-shadow: 0 20px 54px rgba(0, 0, 0, 0.35);
@@ -145,12 +145,12 @@ p { margin: 0; }
     display: inline-flex;
     align-items: center;
     gap: 7px;
-    margin-left: auto;
     color: var(--muted);
     font-size: 0.86rem;
 }
 
 .toggle input { accent-color: var(--accent); }
+.transport-row .toggle:first-of-type { margin-left: auto; }
 
 .timeline-card { padding: 18px; }
 .timeline-heading, .selection-readout, .danser-card {

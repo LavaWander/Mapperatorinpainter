@@ -1899,7 +1899,7 @@ $(document).ready(function() {
                     const result = await window.pywebview.api.open_preview_window();
                     if (result?.status === 'error') throw new Error(result.message);
                 } else {
-                    window.open('/inpaint/preview-window', 'mapperatorinpainter-preview', 'width=1120,height=900,resizable=yes');
+                    window.open('/inpaint/preview-window', 'mapperatorinpainter-preview', 'width=1360,height=1000,resizable=yes');
                 }
                 this.renderPreviewStatus('Preview window open · changes reload automatically');
             } catch (error) {

@@ -11,6 +11,7 @@
     const playfieldContext = playfield.getContext('2d');
     const audio = document.getElementById('preview-audio');
     const autoPlayUpdates = document.getElementById('auto-play-updates');
+    const hitsoundsEnabled = document.getElementById('hitsounds-enabled');
     const channel = typeof BroadcastChannel === 'function'
         ? new BroadcastChannel('mapperatorinpainter-preview')
         : null;
@@ -28,6 +29,11 @@
     let danserLaunching = false;
     let danserRunning = false;
     let audioWasUsed = false;
+    let hitsoundContext = null;
+    let nextHitsoundIndex = 0;
+    let lastHitsoundTime = null;
+    const decodedSamples = new Map();
+    const syntheticSamples = new Map();
 
     function formatTimestamp(milliseconds) {
         const value = Math.max(0, Math.round(Number(milliseconds) || 0));
@@ -164,7 +170,11 @@
         const ratio = window.devicePixelRatio || 1;
         const width = playfield.width / ratio;
         const height = playfield.height / ratio;
-        const scale = Math.min((width - 36) / 512, (height - 28) / 384);
+        const objectMargin = Math.max(72, (scene?.circle_radius || 36) * 3.15);
+        const scale = Math.min(
+            (width - 24) / (512 + objectMargin * 2),
+            (height - 24) / (384 + objectMargin * 2)
+        );
         return {
             ratio,
             width,
@@ -269,6 +279,66 @@
         }
     }
 
+    function drawSliderRepeatMarkers(context, object, transform, color, alpha) {
+        const path = object.path || [];
+        const repeatCount = Math.max(0, (object.repeat || 1) - 1);
+        if (path.length < 2 || repeatCount === 0) return;
+        const radius = scene.circle_radius * transform.scale;
+        const endpoint = path[path.length - 1];
+        drawRepeatMarker(
+            context,
+            transform.left + endpoint[0] * transform.scale,
+            transform.top + endpoint[1] * transform.scale,
+            radius,
+            color,
+            'left',
+            repeatCount > 1 ? repeatCount : null,
+            alpha
+        );
+        if (repeatCount >= 2) {
+            const startpoint = path[0];
+            drawRepeatMarker(
+                context,
+                transform.left + startpoint[0] * transform.scale,
+                transform.top + startpoint[1] * transform.scale,
+                radius,
+                color,
+                'right',
+                null,
+                alpha
+            );
+        }
+    }
+
+    function drawRepeatMarker(context, x, y, radius, color, direction, count, alpha) {
+        context.save();
+        context.globalAlpha = alpha;
+        context.fillStyle = 'rgba(10, 13, 19, 0.90)';
+        context.strokeStyle = '#ffffff';
+        context.lineWidth = Math.max(2, radius * 0.10);
+        context.beginPath();
+        context.arc(x, y, radius * 0.72, 0, Math.PI * 2);
+        context.fill();
+        context.stroke();
+        context.fillStyle = color;
+        context.font = `800 ${Math.max(18, radius * 1.05)}px "Segoe UI Symbol", "Segoe UI", sans-serif`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(direction === 'left' ? '↶' : '↷', x, y + 1);
+        if (count && count > 1) {
+            const badgeX = x + radius * 0.72;
+            const badgeY = y - radius * 0.72;
+            context.fillStyle = '#ffffff';
+            context.beginPath();
+            context.arc(badgeX, badgeY, radius * 0.38, 0, Math.PI * 2);
+            context.fill();
+            context.fillStyle = '#11151d';
+            context.font = `800 ${Math.max(10, radius * 0.38)}px "Segoe UI", sans-serif`;
+            context.fillText(`×${count}`, badgeX, badgeY);
+        }
+        context.restore();
+    }
+
     function drawSpinner(context, object, now, transform, color, alpha) {
         const x = transform.left + 256 * transform.scale;
         const y = transform.top + 192 * transform.scale;
@@ -348,12 +418,137 @@
             const y = transform.top + object.y * transform.scale;
             const radius = scene.circle_radius * transform.scale;
             drawHitCircle(playfieldContext, x, y, radius, color, object.combo, alpha, object.time - now, preempt);
+            if (object.type === 'slider') {
+                drawSliderRepeatMarkers(playfieldContext, object, transform, color, alpha);
+            }
         });
 
         playfieldContext.fillStyle = 'rgba(255,255,255,0.48)';
         playfieldContext.font = '12px "Segoe UI", sans-serif';
         playfieldContext.textAlign = 'right';
         playfieldContext.fillText('lightweight preview', width - 12, height - 10);
+    }
+
+    function ensureHitsoundContext() {
+        if (hitsoundContext) return hitsoundContext;
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return null;
+        hitsoundContext = new AudioContextClass({ latencyHint: 'interactive' });
+        return hitsoundContext;
+    }
+
+    function decodeSample(url) {
+        if (!url || !hitsoundContext) return Promise.resolve(null);
+        if (!decodedSamples.has(url)) {
+            const promise = fetch(url)
+                .then((response) => {
+                    if (!response.ok) throw new Error(`Sample request failed (${response.status}).`);
+                    return response.arrayBuffer();
+                })
+                .then((buffer) => hitsoundContext.decodeAudioData(buffer))
+                .catch(() => null);
+            decodedSamples.set(url, promise);
+        }
+        return decodedSamples.get(url);
+    }
+
+    async function preloadHitsounds() {
+        if (!scene?.hitsounds || !hitsoundContext) return;
+        const urls = new Set();
+        scene.hitsounds.forEach((event) => event.samples.forEach((sample) => {
+            if (sample.url) urls.add(sample.url);
+        }));
+        await Promise.all(Array.from(urls, (url) => decodeSample(url)));
+    }
+
+    function syntheticSample(kind) {
+        const context = hitsoundContext;
+        if (!context) return null;
+        const fallbackKind = kind === 'custom' ? 'normal' : kind;
+        if (syntheticSamples.has(fallbackKind)) return syntheticSamples.get(fallbackKind);
+
+        const durations = { normal: 0.045, whistle: 0.09, finish: 0.15, clap: 0.075 };
+        const duration = durations[fallbackKind] || durations.normal;
+        const frameCount = Math.max(1, Math.round(context.sampleRate * duration));
+        const buffer = context.createBuffer(1, frameCount, context.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let index = 0; index < frameCount; index += 1) {
+            const time = index / context.sampleRate;
+            const progress = index / frameCount;
+            let value;
+            if (fallbackKind === 'normal') {
+                value = Math.sin(Math.PI * 2 * 980 * time) * Math.exp(-progress * 8);
+            } else if (fallbackKind === 'whistle') {
+                value = Math.sin(Math.PI * 2 * (1450 + progress * 650) * time) * Math.exp(-progress * 5);
+            } else if (fallbackKind === 'finish') {
+                value = (Math.sin(Math.PI * 2 * 185 * time) * 0.65 + (Math.random() * 2 - 1) * 0.35)
+                    * Math.exp(-progress * 4.2);
+            } else {
+                value = (Math.random() * 2 - 1) * Math.exp(-progress * 7);
+            }
+            data[index] = value * 0.72;
+        }
+        syntheticSamples.set(fallbackKind, buffer);
+        return buffer;
+    }
+
+    function playBuffer(buffer, volume) {
+        if (!hitsoundContext || !buffer) return;
+        const source = hitsoundContext.createBufferSource();
+        const gain = hitsoundContext.createGain();
+        gain.gain.value = clamp(volume, 0, 1) * 0.72;
+        source.buffer = buffer;
+        source.connect(gain);
+        gain.connect(hitsoundContext.destination);
+        source.start();
+    }
+
+    function playHitsoundEvent(event) {
+        if (!hitsoundsEnabled.checked || !hitsoundContext || hitsoundContext.state !== 'running') return;
+        event.samples.forEach((sample) => {
+            const parsedVolume = Number(sample.volume);
+            const volume = Number.isFinite(parsedVolume) ? parsedVolume / 100 : 1;
+            if (sample.url) {
+                decodeSample(sample.url).then((buffer) => {
+                    if (buffer) playBuffer(buffer, volume);
+                    else playBuffer(syntheticSample(sample.kind), volume);
+                });
+            } else {
+                playBuffer(syntheticSample(sample.kind), volume);
+            }
+        });
+    }
+
+    function resetHitsoundCursor(milliseconds = currentTime) {
+        const events = scene?.hitsounds || [];
+        let lower = 0;
+        let upper = events.length;
+        const target = milliseconds - 12;
+        while (lower < upper) {
+            const middle = Math.floor((lower + upper) / 2);
+            if (events[middle].time < target) lower = middle + 1;
+            else upper = middle;
+        }
+        nextHitsoundIndex = lower;
+        lastHitsoundTime = milliseconds;
+    }
+
+    function processHitsounds(milliseconds) {
+        const events = scene?.hitsounds || [];
+        if (!hitsoundsEnabled.checked || audio.paused || !events.length) {
+            lastHitsoundTime = milliseconds;
+            return;
+        }
+        if (lastHitsoundTime === null || milliseconds < lastHitsoundTime || milliseconds - lastHitsoundTime > 250) {
+            resetHitsoundCursor(milliseconds);
+            return;
+        }
+        while (nextHitsoundIndex < events.length && events[nextHitsoundIndex].time <= milliseconds + 10) {
+            const event = events[nextHitsoundIndex];
+            if (event.time >= lastHitsoundTime - 5) playHitsoundEvent(event);
+            nextHitsoundIndex += 1;
+        }
+        lastHitsoundTime = milliseconds;
     }
 
     function updateCursor(milliseconds, { seekAudio = false, redraw = true } = {}) {
@@ -371,12 +566,16 @@
 
     function seek(milliseconds) {
         updateCursor(milliseconds, { seekAudio: true });
+        resetHitsoundCursor(currentTime);
     }
 
     async function loadScene(map) {
         const response = await post('/inpaint/preview-window/data', { key: map.key });
         if (response.key !== map.key) throw new Error('The preview map changed while loading.');
+        decodedSamples.clear();
         scene = response.scene;
+        resetHitsoundCursor(currentTime);
+        if (hitsoundContext) preloadHitsounds();
     }
 
     function loadAudio(map, targetTime) {
@@ -395,6 +594,12 @@
     async function attemptPlay({ quiet = false } = {}) {
         if (!scene || !state?.map || state.map.mode !== 0) return;
         try {
+            const context = ensureHitsoundContext();
+            if (context) {
+                await context.resume();
+                await preloadHitsounds();
+            }
+            resetHitsoundCursor(audio.currentTime * 1_000);
             await audio.play();
             audioWasUsed = true;
             setStatus(state.generating ? 'Playing previous version' : 'Playing', state.generating ? 'busy' : 'ready');
@@ -405,6 +610,7 @@
 
     function pauseAudio() {
         audio.pause();
+        lastHitsoundTime = null;
         if (state?.has_session) setStatus(state.generating ? 'Generation in progress' : 'Ready', state.generating ? 'busy' : 'ready');
     }
 
@@ -425,6 +631,9 @@
             audio.removeAttribute('src');
             audio.load();
             scene = null;
+            decodedSamples.clear();
+            nextHitsoundIndex = 0;
+            lastHitsoundTime = null;
             lastMapKey = null;
             lastMapIdentity = null;
             currentAudioUrl = null;
@@ -570,7 +779,9 @@
 
     function animationFrame() {
         if (!audio.paused && state?.map) {
-            updateCursor(audio.currentTime * 1_000, { redraw: false });
+            const playbackTime = audio.currentTime * 1_000;
+            updateCursor(playbackTime, { redraw: false });
+            processHitsounds(playbackTime);
             drawTimeline();
         }
         drawPlayfield();
@@ -604,8 +815,12 @@
     });
 
     audio.addEventListener('play', updatePlayButton);
-    audio.addEventListener('pause', updatePlayButton);
+    audio.addEventListener('pause', () => {
+        lastHitsoundTime = null;
+        updatePlayButton();
+    });
     audio.addEventListener('ended', updatePlayButton);
+    audio.addEventListener('seeking', () => resetHitsoundCursor(audio.currentTime * 1_000));
     audio.addEventListener('error', () => {
         if (!currentAudioUrl) return;
         setStatus('Audio unavailable', 'error');
@@ -622,6 +837,10 @@
     document.getElementById('copy-end-button').addEventListener('click', () => copyBoundary('end'));
     autoPlayUpdates.addEventListener('change', () => {
         try { localStorage.setItem('inpaint.previewAutoPlayUpdates', autoPlayUpdates.checked ? 'true' : 'false'); } catch (_) {}
+    });
+    hitsoundsEnabled.addEventListener('change', () => {
+        resetHitsoundCursor(audio.currentTime * 1_000);
+        try { localStorage.setItem('inpaint.previewHitsounds', hitsoundsEnabled.checked ? 'true' : 'false'); } catch (_) {}
     });
 
     document.addEventListener('keydown', (event) => {
@@ -645,6 +864,7 @@
 
     window.addEventListener('resize', resizeCanvases);
     window.addEventListener('beforeunload', () => {
+        hitsoundContext?.close().catch(() => {});
         fetch('/inpaint/preview-window/stop', {
             method: 'POST',
             headers: csrfHeaders,
@@ -655,6 +875,8 @@
     try {
         const saved = localStorage.getItem('inpaint.previewAutoPlayUpdates');
         if (saved !== null) autoPlayUpdates.checked = saved === 'true';
+        const savedHitsounds = localStorage.getItem('inpaint.previewHitsounds');
+        if (savedHitsounds !== null) hitsoundsEnabled.checked = savedHitsounds === 'true';
     } catch (_) {}
     updatePlayButton();
     resizeCanvases();

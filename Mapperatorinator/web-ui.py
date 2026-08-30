@@ -319,9 +319,9 @@ class Api:
                 window = webview.create_window(
                     "Mapperatorinpainter Preview",
                     url=f"{application_base_url}inpaint/preview-window",
-                    width=1120,
-                    height=900,
-                    min_size=(760, 620),
+                    width=1360,
+                    height=1000,
+                    min_size=(860, 680),
                     resizable=True,
                     background_color="#111318",
                 )
@@ -694,9 +694,63 @@ def _preview_map_cache_entry(session_id: str, session: BeatmapsetSession) -> tup
         cached = preview_density_cache.get(map_key)
     if cached is None:
         cached = preview_map_data(difficulty.path, difficulty.length_ms)
+        sample_assets = {}
+        for event in cached["scene"]["hitsounds"]:
+            for sample in event["samples"]:
+                if not sample.get("use_map_asset"):
+                    continue
+                asset_path = _resolve_preview_sample_asset(session, sample["candidate"])
+                if asset_path is None:
+                    continue
+                relative_path = asset_path.relative_to(session.working_directory).as_posix()
+                token = hashlib.sha256(relative_path.encode("utf-8")).hexdigest()[:20]
+                sample["asset_token"] = token
+                sample_assets[token] = asset_path
+        cached["sample_assets"] = sample_assets
         with preview_density_cache_lock:
             preview_density_cache[map_key] = cached
     return map_key, cached
+
+
+def _resolve_preview_sample_asset(session: BeatmapsetSession, candidate_name: str) -> Path | None:
+    candidate_name = (candidate_name or "").strip().strip('"')
+    if not candidate_name:
+        return None
+    normalized = candidate_name.replace("\\", os.sep).replace("/", os.sep)
+    relative = Path(normalized)
+    if relative.is_absolute() or relative.drive or relative.suffix.casefold() not in {".wav", ".ogg", ".mp3"}:
+        return None
+
+    for base in (session.active_difficulty.path.parent, session.working_directory):
+        resolved = (base / relative).resolve()
+        try:
+            resolved.relative_to(session.working_directory)
+        except ValueError:
+            continue
+        if resolved.is_file():
+            return resolved
+    return None
+
+
+def _preview_scene_payload(session_id: str, map_key: str, cached: dict) -> dict:
+    scene = {key: value for key, value in cached["scene"].items() if key != "hitsounds"}
+    scene["hitsounds"] = []
+    for event in cached["scene"]["hitsounds"]:
+        samples = []
+        for original_sample in event["samples"]:
+            sample = dict(original_sample)
+            token = sample.pop("asset_token", None)
+            sample.pop("use_map_asset", None)
+            if token:
+                sample["url"] = url_for(
+                    "inpaint_preview_sample",
+                    session_id=session_id,
+                    token=token,
+                    key=map_key,
+                )
+            samples.append(sample)
+        scene["hitsounds"].append({**event, "samples": samples})
+    return scene
 
 
 def _preview_audio_key(session: BeatmapsetSession) -> str:
@@ -1182,7 +1236,7 @@ def get_inpaint_preview_window_data():
         return jsonify({
             "status": "success",
             "key": map_key,
-            "scene": cached["scene"],
+            "scene": _preview_scene_payload(snapshot.session_id, map_key, cached),
         })
     except ValueError as exc:
         return jsonify({"status": "error", "message": str(exc)}), 409
@@ -1201,6 +1255,25 @@ def inpaint_preview_audio(session_id: str):
         if request.args.get('key') != _preview_audio_key(session):
             raise ValueError("This preview audio URL is stale.")
         return send_file(session.resolve_audio(), conditional=True, max_age=0)
+    except ValueError as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 404
+
+
+@app.route('/inpaint/preview-window/sample/<session_id>/<token>')
+def inpaint_preview_sample(session_id: str, token: str):
+    """Stream a parser-resolved, in-session custom hitsound sample."""
+    snapshot = preview_window_controller.snapshot()
+    try:
+        if snapshot.session_id != session_id:
+            raise ValueError("This preview session is no longer active.")
+        session = _get_inpaint_session(session_id)
+        map_key, cached = _preview_map_cache_entry(session_id, session)
+        if request.args.get('key') != map_key:
+            raise ValueError("This preview sample URL is stale.")
+        asset_path = cached.get("sample_assets", {}).get(token)
+        if asset_path is None:
+            raise ValueError("This preview sample does not exist.")
+        return send_file(asset_path, conditional=True, max_age=0)
     except ValueError as exc:
         return jsonify({"status": "error", "message": str(exc)}), 404
 

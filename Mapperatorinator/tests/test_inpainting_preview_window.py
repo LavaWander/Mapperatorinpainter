@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from pathlib import Path
 
 from inpainting.preview_window import PreviewWindowController, hitobject_density, preview_map_data
@@ -65,6 +66,40 @@ class PreviewWindowControllerTests(unittest.TestCase):
         slider = parsed["scene"]["objects"][2]
         self.assertGreaterEqual(len(slider["path"]), 17)
         self.assertGreater(slider["end_time"], slider["time"])
+        event_types = [event["type"] for event in parsed["scene"]["hitsounds"]]
+        self.assertEqual(5, event_types.count("circle"))
+        self.assertEqual(2, event_types.count("slider_head"))
+        self.assertEqual(2, event_types.count("slider_end"))
+        self.assertEqual(2, event_types.count("spinner_end"))
+
+    def test_repeat_edges_and_hitsound_sample_semantics_are_preserved(self) -> None:
+        content = FIXTURE.read_text(encoding="utf-8-sig")
+        content = content.replace(
+            "64,64,900,1,0,0:0:0:0:",
+            "64,64,900,1,0,0:0:0:55:custom.wav",
+        ).replace(
+            "128,128,1500,2,0,B|256:128|384:128,1,500,0|0,0:0|0:0,0:0:0:0:",
+            "128,128,1500,2,0,B|256:128|384:128,4,500,2|4|8|0|10,2:3|2:3|2:3|2:3|2:3,0:0:2:70:",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "repeats.osu"
+            path.write_text(content, encoding="utf-8-sig")
+            parsed = preview_map_data(path, 10_000)
+
+        slider = parsed["scene"]["objects"][2]
+        self.assertEqual(4, slider["repeat"])
+        slider_events = [event for event in parsed["scene"]["hitsounds"] if event["type"].startswith("slider_")]
+        self.assertEqual(3, sum(event["type"] == "slider_repeat" for event in slider_events))
+        first_head = next(event for event in slider_events if event["time"] == 1_500)
+        self.assertGreater(max(event["time"] for event in slider_events), 8_000)
+        self.assertEqual(
+            ["soft-hitnormal2.wav", "drum-hitwhistle2.wav"],
+            [sample["candidate"] for sample in first_head["samples"]],
+        )
+        circle_event = next(event for event in parsed["scene"]["hitsounds"] if event["type"] == "circle")
+        self.assertEqual("custom", circle_event["samples"][0]["kind"])
+        self.assertEqual("custom.wav", circle_event["samples"][0]["candidate"])
+        self.assertEqual(55, circle_event["samples"][0]["volume"])
 
 
 if __name__ == "__main__":

@@ -46,8 +46,26 @@ same map on every state poll.
   embedded browser's media autoplay restriction.
 
 This renderer is deliberately a workflow preview, not an osu! or Danser clone.
-It does not currently reproduce skins, storyboards, videos, custom hitsounds,
-or every stable rendering quirk.
+It does not currently reproduce skins, storyboards, videos, continuous slider
+loops/ticks, or every stable rendering quirk.
+
+## Preview follow-up
+
+The first user-test pass produced three focused corrections:
+
+- The native preview opens at 1360×1000 and the playfield canvas is taller. Its
+  transform now reserves more than three circle radii around every playfield
+  edge, so hit circles and their largest approach circles are not clipped.
+- Repeating sliders show reverse arrows at the applicable endpoints. Sliders
+  with multiple reverses also show an `×N` badge, and both endpoints are marked
+  when the path reverses at both ends.
+- Hitsounds are scheduled at circle clicks, slider heads, every slider repeat
+  edge, final slider ends, and spinner ends. The parser supplies timing-point
+  sample set/index/volume plus object/edge overrides. Existing beatmap samples
+  are streamed from the isolated session through a traversal-safe endpoint;
+  normal/soft/drum samples that would ordinarily come from the user's osu! skin
+  use lightweight built-in preview sounds. Hitsounds can be disabled in the
+  preview window and the preference is remembered.
 
 ## Danser role
 

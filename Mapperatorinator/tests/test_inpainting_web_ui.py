@@ -284,6 +284,37 @@ class InpaintWebUiTests(unittest.TestCase):
         self.assertEqual(2_500, previewer.calls[0][1])
         self.assertEqual(session.active_difficulty.length_ms + 1, previewer.calls[0][2])
 
+    def test_preview_serves_only_parser_resolved_session_hitsounds(self) -> None:
+        opened = self.post("/inpaint/open", {"path": str(self.source)})
+        session_id = opened.get_json()["session"]["session_id"]
+        session = self.web_ui._get_inpaint_session(session_id)
+        path = session.active_difficulty.path
+        content = path.read_bytes().replace(
+            b"64,64,900,1,0,0:0:0:0:",
+            b"64,64,900,1,0,0:0:0:70:samples/soft-hit.wav",
+        )
+        path.write_bytes(content)
+        session.record_revision(metadata={"kind": "hitsound-test"})
+        self.post("/inpaint/preview-window/config", {
+            "session_id": session_id,
+            "start_time": "0",
+            "end_time": "4",
+        })
+
+        state = self.post("/inpaint/preview-window/state", {}).get_json()
+        scene = self.post(
+            "/inpaint/preview-window/data",
+            {"key": state["map"]["key"]},
+        ).get_json()["scene"]
+        circle_event = next(event for event in scene["hitsounds"] if event["time"] == 900)
+        self.assertEqual("circle", circle_event["type"])
+        self.assertEqual(70, circle_event["samples"][0]["volume"])
+        sample_url = circle_event["samples"][0]["url"]
+        sample_response = self.client.get(sample_url)
+        self.assertEqual(200, sample_response.status_code)
+        self.assertEqual(b"custom-sample", sample_response.data)
+        sample_response.close()
+
     def test_m6_preview_window_controls_are_rendered(self) -> None:
         response = self.client.get("/inpaint/preview-window")
         self.assertEqual(200, response.status_code)
@@ -296,6 +327,7 @@ class InpaintWebUiTests(unittest.TestCase):
             "copy-start-button",
             "copy-end-button",
             "auto-play-updates",
+            "hitsounds-enabled",
             "danser-button",
         ):
             self.assertIn(f'id="{control_id}"', html)

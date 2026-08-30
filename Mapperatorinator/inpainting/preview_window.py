@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import threading
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +12,7 @@ from slider import Beatmap
 
 DEFAULT_SELECTION_MS = 10_000
 DEFAULT_PADDING_MS = 3_000
+SAMPLE_SET_NAMES = {1: "normal", 2: "soft", 3: "drum"}
 
 
 @dataclass(frozen=True)
@@ -186,6 +188,107 @@ def _sample_slider_curve(hit_object) -> list[list[float]]:
     return points
 
 
+def _safe_int(value: str, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _hitsound_samples(
+    beatmap: Beatmap,
+    time,
+    hitsound: int,
+    addition: str,
+    *,
+    edge_sets: str | None = None,
+) -> list[dict]:
+    """Resolve osu! hitSample semantics into sample names and fallback kinds."""
+    parts = (addition or "0:0:0:0:").split(":")
+    parts.extend([""] * (5 - len(parts)))
+    normal_set = _safe_int(parts[0])
+    addition_set = _safe_int(parts[1])
+    sample_index = _safe_int(parts[2])
+    volume = _safe_int(parts[3])
+    custom_filename = parts[4].strip()
+
+    if edge_sets:
+        edge_parts = edge_sets.split(":")
+        if edge_parts:
+            normal_set = _safe_int(edge_parts[0])
+        if len(edge_parts) > 1:
+            addition_set = _safe_int(edge_parts[1])
+
+    if beatmap.timing_points:
+        timing_point = beatmap.timing_point_at(time + timedelta(milliseconds=5))
+        timing_sample_set = int(timing_point.sample_type or 0)
+        timing_sample_index = int(timing_point.sample_set or 0)
+        timing_volume = int(timing_point.volume)
+    else:
+        timing_sample_set = 0
+        timing_sample_index = 0
+        timing_volume = 100
+
+    beatmap_sample_set = {
+        "normal": 1,
+        "soft": 2,
+        "drum": 3,
+    }.get(str(beatmap.sample_set).casefold(), 1)
+    timing_sample_set = timing_sample_set if timing_sample_set in SAMPLE_SET_NAMES else beatmap_sample_set
+    normal_set = normal_set if normal_set in SAMPLE_SET_NAMES else timing_sample_set
+    addition_set = addition_set if addition_set in SAMPLE_SET_NAMES else normal_set
+    sample_index = sample_index or timing_sample_index
+    volume = max(0, min(100, volume or timing_volume))
+
+    if custom_filename:
+        return [{
+            "kind": "custom",
+            "candidate": custom_filename,
+            "volume": volume,
+            "use_map_asset": True,
+        }]
+
+    suffix = "" if sample_index in {0, 1} else str(sample_index)
+    kinds = [("normal", normal_set)]
+    if hitsound & 2:
+        kinds.append(("whistle", addition_set))
+    if hitsound & 4:
+        kinds.append(("finish", addition_set))
+    if hitsound & 8:
+        kinds.append(("clap", addition_set))
+    return [
+        {
+            "kind": kind,
+            "candidate": f"{SAMPLE_SET_NAMES[sample_set]}-hit{kind}{suffix}.wav",
+            "volume": volume,
+            "use_map_asset": sample_index != 0,
+        }
+        for kind, sample_set in kinds
+    ]
+
+
+def _hitsound_event(
+    beatmap: Beatmap,
+    time,
+    hitsound: int,
+    addition: str,
+    event_type: str,
+    *,
+    edge_sets: str | None = None,
+) -> dict:
+    return {
+        "time": _milliseconds(time),
+        "type": event_type,
+        "samples": _hitsound_samples(
+            beatmap,
+            time,
+            int(hitsound),
+            addition,
+            edge_sets=edge_sets,
+        ),
+    }
+
+
 def preview_map_data(path: str | Path, length_ms: int, *, bins: int = 240) -> dict:
     """Parse one difficulty into compact data for the embedded previewer.
 
@@ -196,6 +299,7 @@ def preview_map_data(path: str | Path, length_ms: int, *, bins: int = 240) -> di
     beatmap = Beatmap.from_path(Path(path))
     hit_objects = beatmap.hit_objects(stacking=True)
     objects = []
+    hitsound_events = []
     combo_index = 0
     combo_number = 0
 
@@ -225,6 +329,42 @@ def preview_map_data(path: str | Path, length_ms: int, *, bins: int = 240) -> di
                 "path": _sample_slider_curve(hit_object),
                 "repeat": int(hit_object.repeat),
             })
+            span_count = max(1, int(hit_object.repeat))
+            duration = hit_object.end_time - hit_object.time
+            for edge_index in range(span_count + 1):
+                edge_time = hit_object.time + duration * edge_index / span_count
+                edge_sound = hit_object.edge_sounds[edge_index] if edge_index < len(hit_object.edge_sounds) else 0
+                edge_sets = hit_object.edge_additions[edge_index] if edge_index < len(hit_object.edge_additions) else None
+                if edge_index == 0:
+                    event_type = "slider_head"
+                elif edge_index == span_count:
+                    event_type = "slider_end"
+                else:
+                    event_type = "slider_repeat"
+                hitsound_events.append(_hitsound_event(
+                    beatmap,
+                    edge_time,
+                    edge_sound,
+                    hit_object.addition,
+                    event_type,
+                    edge_sets=edge_sets,
+                ))
+        elif kind == "spinner":
+            hitsound_events.append(_hitsound_event(
+                beatmap,
+                hit_object.end_time,
+                hit_object.hitsound,
+                hit_object.addition,
+                "spinner_end",
+            ))
+        elif kind == "circle":
+            hitsound_events.append(_hitsound_event(
+                beatmap,
+                hit_object.time,
+                hit_object.hitsound,
+                hit_object.addition,
+                "circle",
+            ))
         objects.append(item)
 
     circle_size = float(beatmap.circle_size)
@@ -242,6 +382,7 @@ def preview_map_data(path: str | Path, length_ms: int, *, bins: int = 240) -> di
             "circle_radius": round(54.4 - 4.48 * circle_size, 3),
             "approach_preempt": _approach_preempt(approach_rate),
             "objects": objects,
+            "hitsounds": sorted(hitsound_events, key=lambda event: event["time"]),
         },
     }
 
