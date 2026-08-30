@@ -109,6 +109,27 @@ class InpaintUiRequestTests(unittest.TestCase):
         self.assertEqual(0, config.lookback)
         self.assertEqual(0, config.lookahead)
 
+    def test_blank_conditioning_uses_only_the_default_year(self) -> None:
+        config = compose_inpainting_config(
+            config_dir=Path(__file__).parents[1] / "configs" / "inference",
+            model_name="v32",
+            session=self.session,
+            values={
+                "start_time": "2",
+                "end_time": "4",
+                "difficulty": "",
+                "mapper_id": "",
+                "year": "",
+            },
+        )
+
+        # Difficulty remains unset here so compile_args can calculate it from
+        # the reference map. Mapper style and descriptors stay unconditioned.
+        self.assertIsNone(config.difficulty)
+        self.assertIsNone(config.mapper_id)
+        self.assertIsNone(config.descriptors)
+        self.assertEqual(2024, config.year)
+
     def test_interval_cannot_exceed_selected_map(self) -> None:
         with self.assertRaisesRegex(ValueError, "exceeds the selected map length"):
             compose_inpainting_config(
