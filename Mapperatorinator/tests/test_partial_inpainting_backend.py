@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import tempfile
 from datetime import timedelta
 from pathlib import Path
 
@@ -83,6 +84,32 @@ class PartialBeatmapMergeTests(unittest.TestCase):
         self.assertNotIn(2500, offsets)
         self.assertNotIn(3000, offsets)
         self.assertNotIn(3500, offsets)
+
+    def test_reference_slider_velocity_is_restored_at_end_boundary(self) -> None:
+        # Make the reference SV at the start (0.5x) deliberately differ from
+        # the reference SV at the end (1.0x), proving restoration is based on
+        # the last reference state before end_time rather than start_time.
+        reference_text = self.reference_text.replace(
+            "1000,-100,4,2,1,60,0,0",
+            "1000,-200,4,2,1,60,0,0",
+        )
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            reference_path = Path(temporary_directory) / "reference.osu"
+            reference_path.write_text(reference_text, encoding="utf-8")
+            merged = Beatmap.parse(self.postprocessor.add_to_beatmap(self.generated_text, str(reference_path)))
+
+        boundary_points = [
+            timing_point
+            for timing_point in merged.timing_points
+            if milliseconds(timing_point.offset) == END_TIME and timing_point.parent is not None
+        ]
+
+        # The reference is at 1.0x SV at 4s (its last greenline before the
+        # boundary is -100 at 3.5s), not the 0.5x from the interval start.
+        # The generated map changes to 0.8x at 3.9s, which must not leak into
+        # the untouched portion of the map.
+        self.assertEqual(1, len(boundary_points))
+        self.assertAlmostEqual(-100, boundary_points[0].ms_per_beat)
 
     def test_timing_points_after_an_early_interval_keep_all_reference_effects(self) -> None:
         self.postprocessor.start_time = 0

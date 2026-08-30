@@ -320,11 +320,11 @@ Document what Mapperatorinator currently does rather than silently inventing beh
 
 If behavior is undesirable, file it as a separate improvement rather than contaminating the initial implementation.
 
-### Known issue — restore slider velocity after the regenerated interval
+### Resolved issue — restore slider velocity after the regenerated interval
 
-- [ ] Restore the reference map's effective slider velocity immediately after `end_time` when generated timing changes the SV inside the selected interval.
+- [x] Restore the reference map's effective slider velocity immediately at `end_time` when generated timing changes the SV inside the selected interval.
 
-Current behavior: if inpainting introduces an SV such as `1.5x` near the end of the interval, that value remains active after the interval until the next retained reference greenline. The later greenlines are not deleted; the missing piece is a boundary-state restoration point. The model cannot be expected to emit this reset because it does not receive the entire future map as generation context.
+Previous behavior: if inpainting introduced an SV such as `1.5x` near the end of the interval, that value remained active after the interval until the next retained reference greenline. The later greenlines were not deleted; the missing piece was a boundary-state restoration point. The model cannot be expected to emit this reset because it does not receive the entire future map as generation context.
 
 Future acceptance test:
 
@@ -336,7 +336,7 @@ next reference SV change: much later
 expected immediately after end_time: restore 1.0x
 ```
 
-Implement this as explicit postprocessing boundary reconciliation while preserving all original timing/effect points after the interval.
+Implemented as explicit postprocessing boundary reconciliation: capture the reference map's effective SV at `end_time` before removing interval timing points, then restore that SV after merging generated timing. This deliberately uses the last effective reference SV before the end boundary, which may differ from the SV at the start of the interval, while preserving all original timing/effect points after the interval.
 
 ## Phase 5 — Iterative workflow
 

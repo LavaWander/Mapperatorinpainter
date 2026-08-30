@@ -462,6 +462,15 @@ class Postprocessor(object):
         start_time = timedelta(milliseconds=self.start_time) if self.start_time is not None else timedelta(days=-999)
         end_time = timedelta(milliseconds=self.end_time) if self.end_time is not None else timedelta(days=999)
 
+        # Capture the reference map's effective SV at the end boundary before
+        # timing points in the interval are removed. A generated greenline near
+        # the end would otherwise remain active through the untouched portion
+        # until the next reference SV change.
+        reference_end_sv = None
+        if self.end_time is not None and beatmap.timing_points:
+            reference_end_tp = beatmap.timing_point_at(end_time)
+            reference_end_sv = reference_end_tp.ms_per_beat if reference_end_tp.parent is not None else -100
+
         # Remove all objects between start and end time
         beatmap._hit_objects = [ho for ho in beatmap._hit_objects if ho.time < start_time or ho.time > end_time]
         # Also remove all timing points between start and end time
@@ -502,6 +511,14 @@ class Postprocessor(object):
                 tp = TimingPoint(offset, result_redline.ms_per_beat, result_redline.meter, 2, -1, 100, None, False)
                 tp_change = TimingPointsChange(tp, mpb=True, meter=True, uninherited=True)
                 beatmap.timing_points = tp_change.add_change(beatmap.timing_points, False)
+
+        # Re-establish the SV that the reference map expected at end_time. The
+        # change helper preserves the merged volume/sample/kiai state and only
+        # writes a boundary greenline when the effective SV actually differs.
+        if reference_end_sv is not None and beatmap.timing_points:
+            tp = TimingPoint(end_time, reference_end_sv, 4, 2, -1, 100, None, False)
+            tp_change = TimingPointsChange(tp, mpb=True)
+            beatmap.timing_points = tp_change.add_change(beatmap.timing_points, False)
 
         return beatmap.pack()
 
