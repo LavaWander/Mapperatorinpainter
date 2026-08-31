@@ -295,6 +295,28 @@ class InpaintWebUiTests(unittest.TestCase):
         changed_state = self.post("/inpaint/preview-window/state", {}).get_json()
         self.assertNotEqual(first_key, changed_state["map"]["key"])
 
+    def test_preview_open_can_fall_back_when_editor_interval_is_invalid(self) -> None:
+        opened = self.post("/inpaint/open", {"path": str(self.source)})
+        session_id = opened.get_json()["session"]["session_id"]
+        invalid_values = {
+            "session_id": session_id,
+            "start_time": "not a timestamp",
+            "end_time": "also invalid",
+        }
+
+        rejected = self.post("/inpaint/preview-window/config", invalid_values)
+        fallback = self.post("/inpaint/preview-window/config", {
+            **invalid_values,
+            "fallback_to_start": "true",
+        })
+
+        self.assertEqual(400, rejected.status_code)
+        self.assertEqual(200, fallback.status_code)
+        payload = fallback.get_json()
+        self.assertTrue(payload["used_fallback"])
+        self.assertEqual(0, payload["selection"]["start_time"])
+        self.assertGreater(payload["selection"]["end_time"], 0)
+
     def test_persistent_preview_play_uses_cursor_to_map_end(self) -> None:
         opened = self.post("/inpaint/open", {"path": str(self.source)})
         session_id = opened.get_json()["session"]["session_id"]

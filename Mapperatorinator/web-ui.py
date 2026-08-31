@@ -1155,10 +1155,20 @@ def configure_inpaint_preview_window():
     session_id = (request.form.get('session_id') or '').strip()
     try:
         session = _get_inpaint_session(session_id)
-        start = parse_timestamp_ms(request.form.get('start_time') or '')
-        end = parse_timestamp_ms(request.form.get('end_time') or '')
-        if end <= start:
-            raise ValueError("Preview end time must be after its start time.")
+        fallback_to_start = (request.form.get('fallback_to_start') or '').lower() == 'true'
+        used_fallback = False
+        try:
+            start = parse_timestamp_ms(request.form.get('start_time') or '')
+            end = parse_timestamp_ms(request.form.get('end_time') or '')
+            if end <= start:
+                raise ValueError("Preview end time must be after its start time.")
+        except ValueError:
+            if not fallback_to_start:
+                raise
+            _, cached = _preview_map_cache_entry(session_id, session)
+            start = 0
+            end = min(10_000, cached["length_ms"])
+            used_fallback = True
         padding_before = round(float(request.form.get('padding_before') or '3') * 1_000)
         padding_after = round(float(request.form.get('padding_after') or '3') * 1_000)
         previous_session_id = preview_window_controller.snapshot().session_id
@@ -1172,7 +1182,11 @@ def configure_inpaint_preview_window():
         )
         if previous_session_id and previous_session_id != session_id:
             _close_inpaint_previewer(previous_session_id)
-        return jsonify({"status": "success", "selection": _preview_selection_payload(snapshot)})
+        return jsonify({
+            "status": "success",
+            "selection": _preview_selection_payload(snapshot),
+            "used_fallback": used_fallback,
+        })
     except (ValueError, PreviewError) as exc:
         return jsonify({"status": "error", "message": str(exc)}), 400
 

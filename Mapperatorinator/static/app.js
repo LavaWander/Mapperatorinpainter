@@ -1877,7 +1877,7 @@ $(document).ready(function() {
             }
         },
 
-        async syncPreviewConfig(showError = false) {
+        async syncPreviewConfig(showError = false, fallbackToStart = false) {
             if (!this.session) return false;
             this.savePreviewPadding();
             try {
@@ -1886,10 +1886,13 @@ $(document).ready(function() {
                     start_time: $('#inpaint_start_time').val(),
                     end_time: $('#inpaint_end_time').val(),
                     padding_before: $('#inpaint_preview_padding_before').val(),
-                    padding_after: $('#inpaint_preview_padding_after').val()
+                    padding_after: $('#inpaint_preview_padding_after').val(),
+                    fallback_to_start: fallbackToStart ? 'true' : 'false'
                 });
-                $('#inpaint_start_time').val(this.formatTimestamp(response.selection.start_time));
-                $('#inpaint_end_time').val(this.formatTimestamp(response.selection.end_time));
+                if (!response.used_fallback) {
+                    $('#inpaint_start_time').val(this.formatTimestamp(response.selection.start_time));
+                    $('#inpaint_end_time').val(this.formatTimestamp(response.selection.end_time));
+                }
                 return true;
             } catch (error) {
                 const message = error.responseJSON?.message || 'Could not synchronize preview settings.';
@@ -1900,7 +1903,7 @@ $(document).ready(function() {
 
         async openPreviewWindow() {
             if (!this.session) return;
-            if (!(await this.syncPreviewConfig(true))) return;
+            if (!(await this.syncPreviewConfig(true, true))) return;
             try {
                 if (window.pywebview?.api?.open_preview_window) {
                     const result = await window.pywebview.api.open_preview_window();
