@@ -86,7 +86,7 @@
         document.getElementById('copy-start-button').disabled = !hasMap;
         document.getElementById('copy-end-button').disabled = !hasMap;
         document.getElementById('danser-button').disabled =
-            !embeddedReady || !state?.danser_available || danserLaunching || state?.generating;
+            !embeddedReady || danserLaunching || state?.generating;
         document.getElementById('stop-danser-button').disabled = !danserRunning;
     }
 
@@ -708,7 +708,7 @@
                 `Danser ${bootstrap.danserStatus?.version || '0.11.0'} is ready for a high-fidelity check.`;
         } else {
             document.getElementById('danser-status').textContent =
-                `Optional: install Danser ${bootstrap.danserStatus?.version || '0.11.0'} for high-fidelity checks.`;
+                `Danser is not installed. Run “Install Danser Preview.bat”, then restart Mapperatorinpainter.`;
         }
 
         lastMapKey = map.key;

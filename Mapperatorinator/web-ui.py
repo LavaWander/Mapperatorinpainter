@@ -720,8 +720,8 @@ def _get_inpaint_previewer(session_id: str, session: BeatmapsetSession) -> Danse
         executable = find_danser_executable(Path(script_dir).parent)
         if executable is None:
             raise PreviewError(
-                f"Danser {DANSER_VERSION} is not installed for previews. "
-                "Close Mapperatorinpainter, run 'Install Danser Preview.bat', then reopen it."
+                f"Danser {DANSER_VERSION} preview is not available. "
+                "Run 'Install Danser Preview.bat', then restart Mapperatorinpainter."
             )
         previewer = DanserPreviewer(
             executable=executable,

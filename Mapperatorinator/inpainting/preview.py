@@ -47,7 +47,7 @@ class Previewer(Protocol):
 
 
 def find_danser_executable(project_root: str | Path) -> Path | None:
-    """Find the dedicated Danser CLI without consulting a normal Danser install."""
+    """Find a complete dedicated Danser runtime without using a system install."""
     configured = os.environ.get(DANSER_ENVIRONMENT_VARIABLE, "").strip()
     candidates = []
     if configured:
@@ -61,7 +61,14 @@ def find_danser_executable(project_root: str | Path) -> Path | None:
         root / ".tools" / f"danser-{DANSER_VERSION}" / "danser-cli.exe",
         root / ".tools" / "danser" / "danser-cli.exe",
     ))
-    return next((candidate.resolve() for candidate in candidates if candidate.is_file()), None)
+    for candidate in candidates:
+        if all((
+            candidate.is_file(),
+            (candidate.parent / "danser-core.dll").is_file(),
+            (candidate.parent / "assets.dpak").is_file(),
+        )):
+            return candidate.resolve()
+    return None
 
 
 class DanserPreviewer:

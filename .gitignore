@@ -1,2 +1,8 @@
 .tools/
 /inpaint_output/*
+/runtime/
+/model_cache/
+/.portable-install.json
+/.portable-state/
+/.update-backup-*/
+/dist/

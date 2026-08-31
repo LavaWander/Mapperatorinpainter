@@ -407,6 +407,23 @@ class InpaintWebUiTests(unittest.TestCase):
         self.assertEqual(2_500, previewer.calls[0][1])
         self.assertEqual(session.active_difficulty.length_ms + 1, previewer.calls[0][2])
 
+    def test_danser_play_reports_portable_installer_when_runtime_is_missing(self) -> None:
+        opened = self.post("/inpaint/open", {"path": str(self.source)})
+        session_id = opened.get_json()["session"]["session_id"]
+        self.post("/inpaint/preview-window/config", {
+            "session_id": session_id,
+            "start_time": "0",
+            "end_time": "4",
+        })
+
+        with patch.object(self.web_ui, "find_danser_executable", return_value=None):
+            response = self.post("/inpaint/preview-window/play", {"cursor": "1000"})
+
+        self.assertEqual(400, response.status_code)
+        message = response.get_json()["message"]
+        self.assertIn("Install Danser Preview.bat", message)
+        self.assertIn("restart Mapperatorinpainter", message)
+
     def test_preview_serves_only_parser_resolved_session_hitsounds(self) -> None:
         opened = self.post("/inpaint/open", {"path": str(self.source)})
         session_id = opened.get_json()["session"]["session_id"]

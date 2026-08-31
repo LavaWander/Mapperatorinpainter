@@ -106,7 +106,18 @@ class DanserPreviewerTests(unittest.TestCase):
             executable = root / ".tools" / "danser-0.11.0" / "danser-cli.exe"
             executable.parent.mkdir(parents=True)
             executable.write_bytes(b"fake-danser")
+            (executable.parent / "danser-core.dll").write_bytes(b"fake-core")
+            (executable.parent / "assets.dpak").write_bytes(b"fake-assets")
             self.assertEqual(executable.resolve(), find_danser_executable(root))
+
+    def test_incomplete_danser_runtime_is_not_reported_as_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            executable = root / ".tools" / "danser-0.11.0" / "danser-cli.exe"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"fake-danser")
+
+            self.assertIsNone(find_danser_executable(root))
 
 
 if __name__ == "__main__":
