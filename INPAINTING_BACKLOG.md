@@ -627,12 +627,18 @@ Generation complete
 
 `Open in Inpaint`:
 
-- [ ] Reuse existing generated working files.
-- [ ] Switch tab.
-- [ ] Select generated difficulty.
-- [ ] Populate inherited parameters.
-- [ ] Do not reload model.
-- [ ] Do not export then re-extract an `.osz`.
+- [x] Reuse existing generated working files.
+- [x] Switch tab.
+- [x] Select generated difficulty.
+- [x] Populate inherited parameters.
+- [x] Do not reload model.
+- [x] Do not export then re-extract an `.osz`.
+
+**Status:** Complete for M7. A successful Generate job exposes an **Open in
+Inpaint** action. The normal inference result is materialized once into a
+session-owned workspace and adopted directly by the existing Inpaint session
+manager. Generation conditioning is transferred, the shared model server is
+retained, and the original `.osz`/song-folder open paths remain available.
 
 ## Phase 11 — Reliability tests
 

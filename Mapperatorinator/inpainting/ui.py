@@ -135,6 +135,7 @@ def session_payload(session_id: str, session: BeatmapsetSession) -> dict:
         "source_name": session.source_archive.name,
         "working_directory": str(session.working_directory),
         "dirty": session.dirty,
+        "generation_provenance": dict(session.generation_provenance),
         "revisions": session.revision_payload(),
         "active_difficulty": difficulty_payload(session.active_difficulty),
         "difficulties": [difficulty_payload(item) for item in session.difficulties],

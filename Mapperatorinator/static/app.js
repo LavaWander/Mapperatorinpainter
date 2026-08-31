@@ -1101,6 +1101,7 @@ $(document).ready(function() {
                     </div>
                     <div class="progress-card-actions">
                         <button type="button" class="cancel-button" style="display:none;">Cancel</button>
+                        <button type="button" class="open-inpaint-button secondary" style="display:none;">Open in Inpaint</button>
                     </div>
                     <div class="progress-card-links warning-log-link" style="display:none;">
                         <a href="#">View warning log</a>
@@ -1147,6 +1148,7 @@ $(document).ready(function() {
                     $progressBar: $card.find('.progressBar'),
                     $progressBarContainer: $card.find('.progressBarContainer'),
                     $cancelButton: $card.find('.cancel-button'),
+                    $openInpaintButton: $card.find('.open-inpaint-button'),
                     $warningLogLink: $card.find('.warning-log-link'),
                     $warningLogLinkAnchor: $card.find('.warning-log-link a'),
                     $warningLog: $card.find('.warning-log'),
@@ -1159,6 +1161,7 @@ $(document).ready(function() {
 
             $card.find('.progress-card-close').on('click', () => this.requestClose(job, $card));
             job.elements.$cancelButton.on('click', () => this.requestCancel(job));
+            job.elements.$openInpaintButton.on('click', () => InpaintManager.openGenerated(job));
 
             this.setJobStatus(job, 'progress.starting', 'Starting...');
             this.refreshJobTranslations(job);
@@ -1172,6 +1175,9 @@ $(document).ready(function() {
             const $card = $cardOverride || job?.elements?.$card;
             if (job?.evtSource) {
                 job.evtSource.close();
+            }
+            if (job?.generationResult && !job.handedOff) {
+                $.post('/generation/discard-handoff', { job_id: job.id });
             }
             if ($card) {
                 const tempKey = $card.data('job-key');
@@ -1196,12 +1202,9 @@ $(document).ready(function() {
                 if (status === 'completed' || status === 'error' || status === 'cancelled') {
                     const jobId = $card.data('job-id');
                     const tempKey = $card.data('job-key');
-                    $card.remove();
-                    if (jobId) {
-                        AppState.jobs.delete(jobId);
-                    } else if (tempKey) {
-                        AppState.jobs.delete(tempKey);
-                    }
+                    const job = AppState.jobs.get(jobId || tempKey);
+                    if (status === 'completed' && job?.generationResult && !job.handedOff) return;
+                    this.removeJob(jobId || tempKey, $card);
                 }
             });
             this.updateProgressOutputVisibility();
@@ -1318,6 +1321,17 @@ $(document).ready(function() {
             job.evtSource.addEventListener("inpaint_export_error", (e) => {
                 job.inpaintExportError = e.data;
                 Utils.showFlashMessage(`Generation succeeded, but automatic output failed: ${e.data}`, 'error');
+            });
+            job.evtSource.addEventListener("generation_result", (e) => {
+                try {
+                    job.generationResult = JSON.parse(e.data);
+                } catch (_) {
+                    job.generationResult = null;
+                }
+            });
+            job.evtSource.addEventListener("generation_handoff_error", (e) => {
+                job.generationHandoffError = e.data;
+                Utils.showFlashMessage(e.data, 'error');
             });
             job.evtSource.addEventListener("end", (e) => this.handleSSEEnd(job, e));
         },
@@ -1501,6 +1515,7 @@ $(document).ready(function() {
                 job.elements.$status.css('color', '');
                 job.elements.$progressBar.css("width", "100%").removeClass('error');
                 job.elements.$card.data('status', 'completed');
+                if (job.generationResult) job.elements.$openInpaintButton.show();
             }
 
             job.elements.$cancelButton.hide();
@@ -1749,6 +1764,60 @@ $(document).ready(function() {
             } finally {
                 this.setBusy(false);
             }
+        },
+
+        async openGenerated(job) {
+            if (!job?.id || !job.generationResult || this.busy) return;
+            if (this.session) {
+                if (!(await this.finishSession())) return;
+                this.clearSession();
+            }
+
+            this.setBusy(true);
+            job.elements.$openInpaintButton.prop('disabled', true).text('Opening…');
+            try {
+                const response = await this.request('/inpaint/open-generated', { job_id: job.id });
+                $('#inpaint_start_time').val('00:00.000').data('user-edited', false);
+                $('#inpaint_end_time').data('user-edited', false);
+                this.renderSession(response.session);
+                this.applyGenerationProvenance(response.provenance || {});
+                job.handedOff = true;
+                job.elements.$openInpaintButton.text('Opened in Inpaint').prop('disabled', true);
+                ModeManager.select('inpaint');
+                Utils.smoothScroll('#inpaint-panel');
+                Utils.showFlashMessage(`Opened ${response.session.active_difficulty.version} in Inpaint.`);
+            } catch (error) {
+                job.elements.$openInpaintButton.prop('disabled', false).text('Open in Inpaint');
+                Utils.showFlashMessage(error.responseJSON?.message || 'Could not open generated map in Inpaint.', 'error');
+            } finally {
+                this.setBusy(false);
+            }
+        },
+
+        applyGenerationProvenance(provenance) {
+            const setValue = (selector, value, fallback = '') => $(selector).val(
+                value !== null && value !== undefined ? value : fallback
+            );
+            setValue('#inpaint_model', provenance.model);
+            setValue('#inpaint_target_difficulty', provenance.difficulty);
+            setValue('#inpaint_mapper_id', provenance.mapper_id);
+            setValue('#inpaint_year', provenance.year, 2024);
+            setValue('#inpaint_seed', provenance.seed);
+            setValue('#inpaint_temperature', provenance.temperature);
+            setValue('#inpaint_cfg_scale', provenance.cfg_scale);
+            setValue('#inpaint_top_p', provenance.top_p);
+            setValue('#inpaint_lookback', provenance.lookback);
+            setValue('#inpaint_lookahead', provenance.lookahead);
+            setValue('#inpaint_lora_path', provenance.lora_path);
+            $('#inpaint_timing_context').prop('checked', Boolean(provenance.timing_context));
+            $('#inpaint_hitsounds').val(
+                provenance.hitsounded === true ? 'yes' : provenance.hitsounded === false ? 'no' : 'inherit'
+            );
+            DescriptorManager.applySelections({
+                positive: provenance.descriptors || [],
+                negative: provenance.negative_descriptors || []
+            }, 'inpaint');
+            this.updateModelControls();
         },
 
         renderSession(session) {

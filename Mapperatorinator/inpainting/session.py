@@ -94,11 +94,13 @@ class BeatmapsetSession:
         working_directory: Path,
         difficulties: tuple[BeatmapDifficulty, ...],
         source_sha256: str,
+        generation_provenance: Mapping[str, Any] | None = None,
     ) -> None:
         self.source_archive = source_archive
         self.working_directory = working_directory
         self.difficulties = difficulties
         self.source_sha256 = source_sha256
+        self.generation_provenance = dict(generation_provenance or {})
         self.created_at = datetime.now(timezone.utc)
         self.session_identifier = self.created_at.strftime("%Y%m%d-%H%M%S")
         self.active_difficulty = next(
@@ -165,6 +167,34 @@ class BeatmapsetSession:
         except Exception:
             shutil.rmtree(working_directory, ignore_errors=True)
             raise
+
+    @classmethod
+    def adopt_generated_workspace(
+        cls,
+        source_result: str | Path,
+        working_directory: str | Path,
+        *,
+        provenance: Mapping[str, Any] | None = None,
+        supported_modes: Collection[int] | None = None,
+    ) -> "BeatmapsetSession":
+        """Adopt a job-owned generated workspace without copying or archiving it."""
+        source = Path(source_result).expanduser().resolve()
+        workspace = Path(working_directory).expanduser().resolve()
+        if not source.is_file():
+            raise BeatmapsetOpenError(f"Generated result no longer exists: {source}")
+        if not workspace.is_dir() or not workspace.name.startswith("session-"):
+            raise BeatmapsetOpenError(f"Generated workspace is invalid: {workspace}")
+        difficulties = cls._discover_difficulties(
+            workspace,
+            frozenset(cls.DEFAULT_SUPPORTED_MODES if supported_modes is None else supported_modes),
+        )
+        return cls(
+            source_archive=source,
+            working_directory=workspace,
+            difficulties=difficulties,
+            source_sha256=cls._sha256(source),
+            generation_provenance=provenance,
+        )
 
     @staticmethod
     def _sha256(path: Path) -> str:

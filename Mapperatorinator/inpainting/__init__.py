@@ -31,6 +31,7 @@ from .preview_window import (
     hitobject_density,
     preview_map_data,
 )
+from .handoff import GeneratedHandoffError, materialize_generated_workspace
 
 __all__ = [
     "AssetResolutionError",
@@ -41,6 +42,7 @@ __all__ = [
     "ExportError",
     "GenerationTransactionError",
     "GenerationValidationError",
+    "GeneratedHandoffError",
     "DANSER_VERSION",
     "DanserPreviewer",
     "PreviewError",
@@ -56,4 +58,5 @@ __all__ = [
     "find_danser_executable",
     "hitobject_density",
     "preview_map_data",
+    "materialize_generated_workspace",
 ]

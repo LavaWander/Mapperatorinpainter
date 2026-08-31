@@ -26,6 +26,8 @@ import multiprocessing as mp
 import queue as queue_mod
 import datetime
 import secrets
+import shutil
+import tempfile
 import time
 
 import webview
@@ -43,6 +45,7 @@ from inpainting.preview_window import PreviewWindowController, preview_map_data
 from inpainting.session import BeatmapsetSession
 from inpainting.ui import compose_inpainting_config, parse_timestamp_ms, session_payload
 from inpainting.workflow import generation_revision_metadata, regenerate_interval, restore_snapshot
+from inpainting.handoff import materialize_generated_workspace
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 template_folder = os.path.join(script_dir, 'template')
@@ -353,6 +356,8 @@ preview_density_cache = {}
 preview_density_cache_lock = threading.Lock()
 preview_control_window = None
 preview_control_window_lock = threading.Lock()
+generated_handoffs = {}
+generated_handoffs_lock = threading.Lock()
 application_base_url = None
 shutdown_lock = threading.Lock()
 shutdown_started = False
@@ -448,6 +453,10 @@ def _shutdown_inference_processes():
             except Exception:
                 pass
 
+        workspace = rec.get("handoff_workspace")
+        if workspace:
+            shutil.rmtree(workspace, ignore_errors=True)
+
 
 def _shutdown_owned_model_servers():
     with owned_server_clients_lock:
@@ -519,6 +528,13 @@ def _shutdown_application_resources():
             session.cleanup()
         except Exception:
             traceback.print_exc()
+    with generated_handoffs_lock:
+        handoffs = list(generated_handoffs.values())
+        generated_handoffs.clear()
+    for handoff in handoffs:
+        workspace = handoff.get("workspace")
+        if workspace:
+            shutil.rmtree(workspace, ignore_errors=True)
     _shutdown_owned_model_servers()
 
 
@@ -587,7 +603,12 @@ class _QueueWriter(io.TextIOBase):
             self._buf = ""
 
 
-def _inference_worker(cfg: InferenceConfig, out_q: mp.Queue):
+def _inference_worker(
+    cfg: InferenceConfig,
+    out_q: mp.Queue,
+    handoff_workspace: str,
+    provenance: dict,
+):
     """Worker entrypoint executed in a separate process (spawn-safe)."""
     import sys as _sys
     import traceback as _traceback
@@ -598,8 +619,24 @@ def _inference_worker(cfg: InferenceConfig, out_q: mp.Queue):
         _sys.stdout = qw
         _sys.stderr = qw
 
-        main(cfg)
+        osu_content, result_path = main(cfg)
         qw.flush()
+        try:
+            manifest = materialize_generated_workspace(
+                handoff_workspace,
+                osu_content=osu_content,
+                result_path=result_path,
+                audio_path=cfg.audio_path,
+                background_path=cfg.background,
+                provenance=provenance,
+            )
+        except Exception as exc:
+            out_q.put({
+                "_event": "generation_handoff_error",
+                "message": f"Generated successfully, but Open in Inpaint is unavailable: {exc}",
+            })
+        else:
+            out_q.put({"_event": "generation_result", "manifest": manifest})
         out_q.put({"_event": "exit", "code": 0})
     except Exception as e:
         try:
@@ -643,6 +680,27 @@ def _get_inpaint_session(session_id: str) -> BeatmapsetSession:
     if session is None:
         raise ValueError("Inpaint session was not found. Open the .osz again.")
     return session
+
+
+def _generation_provenance(cfg: InferenceConfig, model_name: str) -> dict:
+    contexts = [getattr(context, "value", str(context)).lower() for context in (cfg.in_context or [])]
+    return {
+        "model": model_name,
+        "seed": cfg.seed,
+        "difficulty": cfg.difficulty,
+        "descriptors": list(cfg.descriptors or []),
+        "negative_descriptors": list(cfg.negative_descriptors or []),
+        "mapper_id": cfg.mapper_id,
+        "year": cfg.year,
+        "temperature": cfg.temperature,
+        "cfg_scale": cfg.cfg_scale,
+        "top_p": cfg.top_p,
+        "lookback": cfg.lookback,
+        "lookahead": cfg.lookahead,
+        "hitsounded": cfg.hitsounded,
+        "timing_context": "timing" in contexts,
+        "lora_path": cfg.lora_path,
+    }
 
 
 def _session_has_active_job(session_id: str) -> bool:
@@ -954,16 +1012,32 @@ def start_inference():
         return jsonify({"status": "error", "message": f"Failed to ensure inference server: {e}"}), 500
 
     # Spawn the worker process.
+    handoff_workspace = None
     try:
+        session_parent = Path(tempfile.gettempdir()) / "mapperatorinator"
+        session_parent.mkdir(parents=True, exist_ok=True)
+        handoff_workspace = Path(tempfile.mkdtemp(prefix="session-generated-", dir=session_parent)).resolve()
+        provenance = _generation_provenance(cfg, config_name)
         q = mp.Queue()
-        p = mp.Process(target=_inference_worker, args=(cfg, q), daemon=True)
+        p = mp.Process(
+            target=_inference_worker,
+            args=(cfg, q, str(handoff_workspace), provenance),
+            daemon=True,
+        )
         p.start()
 
         with process_lock:
-            processes[job_id] = {"process": p, "queue": q}
+            processes[job_id] = {
+                "process": p,
+                "queue": q,
+                "handoff_workspace": str(handoff_workspace),
+                "generation_provenance": provenance,
+            }
 
         return jsonify({"status": "success", "message": "Inference started", "job_id": job_id}), 202
     except Exception as e:
+        if handoff_workspace is not None:
+            shutil.rmtree(handoff_workspace, ignore_errors=True)
         traceback.print_exc()
         return jsonify({"status": "error", "message": f"Failed to start process: {e}"}), 500
 
@@ -1455,6 +1529,7 @@ def stream_output():
         full_output_lines = []
         error_occurred = False
         exit_code = None
+        generation_manifest = None
 
         try:
             while True:
@@ -1470,6 +1545,17 @@ def stream_output():
                 if isinstance(item, dict) and item.get("_event") == "exit":
                     exit_code = item.get("code", 0)
                     break
+
+                if isinstance(item, dict) and item.get("_event") == "generation_result":
+                    generation_manifest = item.get("manifest") or {}
+                    with generated_handoffs_lock:
+                        generated_handoffs[job_id] = generation_manifest
+                    yield f"event: generation_result\ndata: {json.dumps(generation_manifest)}\n\n"
+                    continue
+
+                if isinstance(item, dict) and item.get("_event") == "generation_handoff_error":
+                    yield f"event: generation_handoff_error\ndata: {item.get('message', '')}\n\n"
+                    continue
 
                 line = str(item)
                 full_output_lines.append(line + "\n")
@@ -1514,6 +1600,10 @@ def stream_output():
                         restore_snapshot(rec["inpaint_path"], rec["inpaint_snapshot"])
                 except Exception:
                     traceback.print_exc()
+            elif generation_manifest is None:
+                workspace = rec.get("handoff_workspace")
+                if workspace:
+                    shutil.rmtree(workspace, ignore_errors=True)
 
             # Save logs on error (same behavior as before).
             if error_occurred:
@@ -1559,6 +1649,59 @@ def stream_output():
                 pass
 
     return Response(generate(), mimetype='text/event-stream')
+
+
+@app.route('/inpaint/open-generated', methods=['POST'])
+def open_generated_inpaint_session():
+    """Adopt one completed Generate job without `.osz` round-tripping."""
+    job_id = (request.form.get('job_id') or '').strip()
+    if not job_id:
+        return jsonify({"status": "error", "message": "Choose a completed Generate job first."}), 400
+
+    with generated_handoffs_lock:
+        manifest = generated_handoffs.pop(job_id, None)
+    if manifest is None:
+        return jsonify({"status": "error", "message": "This generated result is no longer available for handoff."}), 404
+
+    session = None
+    session_id = None
+    try:
+        session = BeatmapsetSession.adopt_generated_workspace(
+            manifest["result_path"],
+            manifest["workspace"],
+            provenance=manifest.get("provenance"),
+        )
+        session_id = uuid.uuid4().hex
+        payload = session_payload(session_id, session)
+        with inpaint_sessions_lock:
+            inpaint_sessions[session_id] = session
+        return jsonify({
+            "status": "success",
+            "session": payload,
+            "provenance": dict(manifest.get("provenance") or {}),
+        })
+    except Exception as exc:
+        if session is not None:
+            with inpaint_sessions_lock:
+                if session_id is not None:
+                    inpaint_sessions.pop(session_id, None)
+            session.cleanup()
+        elif manifest.get("workspace") and Path(manifest["workspace"]).is_dir():
+            with generated_handoffs_lock:
+                generated_handoffs.setdefault(job_id, manifest)
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+
+@app.route('/generation/discard-handoff', methods=['POST'])
+def discard_generated_handoff():
+    job_id = (request.form.get('job_id') or '').strip()
+    with generated_handoffs_lock:
+        manifest = generated_handoffs.pop(job_id, None)
+    if manifest is not None:
+        workspace = manifest.get("workspace")
+        if workspace:
+            shutil.rmtree(workspace, ignore_errors=True)
+    return jsonify({"status": "success"})
 
 
 @app.route('/cancel_inference', methods=['POST'])

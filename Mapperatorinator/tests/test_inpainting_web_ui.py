@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import sys
 import tempfile
 import unittest
@@ -8,7 +9,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from inpainting.preview import PreviewLaunch
-from tests.test_inpainting_session import normal_entries, write_archive
+from inpainting.handoff import materialize_generated_workspace
+from tests.test_inpainting_session import make_osu, normal_entries, write_archive
 
 
 WEB_UI_PATH = Path(__file__).parents[1] / "web-ui.py"
@@ -72,6 +74,11 @@ class InpaintWebUiTests(unittest.TestCase):
             self.web_ui.inpaint_sessions.clear()
         for session in sessions:
             session.cleanup()
+        with self.web_ui.generated_handoffs_lock:
+            handoffs = list(self.web_ui.generated_handoffs.values())
+            self.web_ui.generated_handoffs.clear()
+        for handoff in handoffs:
+            shutil.rmtree(handoff["workspace"], ignore_errors=True)
         snapshot = self.web_ui.preview_window_controller.snapshot()
         if snapshot.session_id:
             self.web_ui.preview_window_controller.clear_session(snapshot.session_id)
@@ -186,6 +193,63 @@ class InpaintWebUiTests(unittest.TestCase):
         payload = opened.get_json()["session"]
         self.assertEqual(source_folder.name, payload["source_name"])
         self.assertNotEqual(str(source_folder), payload["working_directory"])
+
+    def test_generated_workspace_handoff_is_adopted_without_archive_roundtrip(self) -> None:
+        root = Path(self.temporary_directory.name)
+        workspace = Path(tempfile.mkdtemp(prefix="session-generated-", dir=root))
+        audio = root / "generated-audio.wav"
+        background = root / "generated-bg.jpg"
+        result = root / "normal-generate-output.osu"
+        audio.write_bytes(b"RIFF-generated")
+        background.write_bytes(b"jpeg-generated")
+        content = make_osu(
+            version="Generated",
+            audio_filename="generated-audio.wav",
+            background="generated-bg.jpg",
+        )
+        result.write_bytes(content)
+        provenance = {
+            "model": "v32",
+            "seed": 777,
+            "difficulty": 8.4,
+            "descriptors": ["skillset/streams"],
+            "negative_descriptors": [],
+            "timing_context": True,
+        }
+        manifest = materialize_generated_workspace(
+            workspace,
+            osu_content=content.decode("utf-8"),
+            result_path=result,
+            audio_path=audio,
+            background_path=background,
+            provenance=provenance,
+        )
+        with self.web_ui.generated_handoffs_lock:
+            self.web_ui.generated_handoffs["generate-job"] = manifest
+
+        opened = self.post("/inpaint/open-generated", {"job_id": "generate-job"})
+
+        self.assertEqual(200, opened.status_code)
+        payload = opened.get_json()
+        self.assertEqual(provenance, payload["provenance"])
+        self.assertEqual(workspace.resolve(), Path(payload["session"]["working_directory"]))
+        self.assertEqual(provenance, payload["session"]["generation_provenance"])
+        self.assertFalse(payload["session"]["dirty"])
+        with self.web_ui.generated_handoffs_lock:
+            self.assertNotIn("generate-job", self.web_ui.generated_handoffs)
+
+    def test_discard_generated_handoff_removes_job_workspace(self) -> None:
+        root = Path(self.temporary_directory.name)
+        workspace = Path(tempfile.mkdtemp(prefix="session-generated-", dir=root))
+        with self.web_ui.generated_handoffs_lock:
+            self.web_ui.generated_handoffs["discard-job"] = {"workspace": str(workspace)}
+
+        discarded = self.post("/generation/discard-handoff", {"job_id": "discard-job"})
+
+        self.assertEqual(200, discarded.status_code)
+        self.assertFalse(workspace.exists())
+        with self.web_ui.generated_handoffs_lock:
+            self.assertNotIn("discard-job", self.web_ui.generated_handoffs)
 
     def test_session_mutations_require_csrf(self) -> None:
         response = self.client.post("/inpaint/open", data={"path": str(self.source)})
