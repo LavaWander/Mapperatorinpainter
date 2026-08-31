@@ -581,8 +581,8 @@
         if (hitsoundContext) preloadHitsounds();
     }
 
-    async function loadAudio(map, targetTime) {
-        if (currentAudioUrl === map.audio_url) {
+    async function loadAudio(map, targetTime, { forceReload = false } = {}) {
+        if (currentAudioUrl === map.audio_url && !forceReload) {
             seek(targetTime);
             return;
         }
@@ -692,7 +692,9 @@
             // revision can take long enough for the old audio/scene pair to drift.
             audio.pause();
             await loadScene(map);
-            await loadAudio(map, targetTime);
+            // A fresh media pipeline per revision avoids retaining a decoder
+            // timeline that no longer belongs to the newly parsed scene.
+            await loadAudio(map, targetTime, { forceReload: true });
         } else {
             updateCursor(targetTime, { redraw: false });
         }

@@ -57,6 +57,7 @@ class PreviewWindowControllerTests(unittest.TestCase):
         self.assertEqual(9, count)
         self.assertEqual(10, len(density))
         self.assertEqual(count, parsed["object_count"])
+        self.assertEqual(4_928, parsed["length_ms"])
         self.assertEqual(512, parsed["scene"]["width"])
         self.assertGreater(parsed["scene"]["circle_radius"], 0)
         self.assertEqual(

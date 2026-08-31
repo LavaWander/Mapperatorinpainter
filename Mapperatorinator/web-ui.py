@@ -772,7 +772,7 @@ def _preview_map_payload(session_id: str, session: BeatmapsetSession) -> dict:
         "relative_path": difficulty.relative_path,
         "version": difficulty.version,
         "mode": difficulty.mode,
-        "length_ms": difficulty.length_ms,
+        "length_ms": cached["length_ms"],
         "title": metadata["title"],
         "artist": metadata["artist"],
         "mapper": difficulty.mapper,
@@ -1201,7 +1201,8 @@ def get_inpaint_preview_window_state():
         })
 
     try:
-        length_ms = session.active_difficulty.length_ms
+        map_payload = _preview_map_payload(snapshot.session_id, session)
+        length_ms = map_payload["length_ms"]
         if length_ms is not None and (
             snapshot.selection_start >= length_ms or snapshot.selection_end > length_ms
         ):
@@ -1217,7 +1218,7 @@ def get_inpaint_preview_window_state():
             "status": "success",
             "has_session": True,
             "selection": _preview_selection_payload(snapshot),
-            "map": _preview_map_payload(snapshot.session_id, session),
+            "map": map_payload,
             "generating": _session_has_active_job(snapshot.session_id),
             "danser_available": find_danser_executable(Path(script_dir).parent) is not None,
         })
@@ -1294,7 +1295,8 @@ def play_inpaint_preview_window():
             raise ValueError("Wait for regeneration to finish before previewing.")
         if session.active_difficulty.mode != 0:
             raise ValueError("Danser previews support only osu!standard difficulties (mode 0).")
-        length_ms = session.active_difficulty.length_ms
+        _, cached = _preview_map_cache_entry(snapshot.session_id, session)
+        length_ms = cached["length_ms"]
         if length_ms is None or length_ms <= 0:
             raise ValueError("The active difficulty has no playable hitobjects to preview.")
         cursor = int(request.form.get('cursor') or snapshot.cursor)
@@ -1328,8 +1330,9 @@ def copy_inpaint_preview_boundary():
         if not snapshot.session_id:
             raise ValueError("Open a beatmapset in Inpaint first.")
         session = _get_inpaint_session(snapshot.session_id)
-        length_ms = session.active_difficulty.length_ms
-        if length_ms is None:
+        _, cached = _preview_map_cache_entry(snapshot.session_id, session)
+        length_ms = cached["length_ms"]
+        if length_ms <= 0:
             raise ValueError("The active difficulty has no playable hitobjects.")
         boundary = (request.form.get('boundary') or '').strip().lower()
         timestamp = int(request.form.get('cursor') or snapshot.cursor)

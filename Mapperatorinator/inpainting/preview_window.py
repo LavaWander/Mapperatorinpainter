@@ -298,6 +298,11 @@ def preview_map_data(path: str | Path, length_ms: int, *, bins: int = 240) -> di
     """
     beatmap = Beatmap.from_path(Path(path))
     hit_objects = beatmap.hit_objects(stacking=True)
+    parsed_length_ms = max(
+        (_milliseconds(getattr(hit_object, "end_time", hit_object.time)) for hit_object in hit_objects),
+        default=0,
+    )
+    effective_length_ms = max(1, parsed_length_ms)
     objects = []
     hitsound_events = []
     combo_index = 0
@@ -370,7 +375,8 @@ def preview_map_data(path: str | Path, length_ms: int, *, bins: int = 240) -> di
     circle_size = float(beatmap.circle_size)
     approach_rate = float(beatmap.approach_rate)
     return {
-        "density": _density_from_hitobjects(hit_objects, length_ms, bins),
+        "length_ms": effective_length_ms,
+        "density": _density_from_hitobjects(hit_objects, effective_length_ms, bins),
         "object_count": len(hit_objects),
         "metadata": {
             "title": beatmap.title,
