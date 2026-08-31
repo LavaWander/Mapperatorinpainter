@@ -1312,6 +1312,13 @@ $(document).ready(function() {
             job.evtSource.addEventListener("error_log", (e) => {
                 job.errorLogFilePath = e.data;
             });
+            job.evtSource.addEventListener("inpaint_export", (e) => {
+                job.inpaintExportPath = e.data;
+            });
+            job.evtSource.addEventListener("inpaint_export_error", (e) => {
+                job.inpaintExportError = e.data;
+                Utils.showFlashMessage(`Generation succeeded, but automatic output failed: ${e.data}`, 'error');
+            });
             job.evtSource.addEventListener("end", (e) => this.handleSSEEnd(job, e));
         },
 
@@ -1927,7 +1934,10 @@ $(document).ready(function() {
                 if (success) {
                     try {
                         await this.refreshSession();
-                        Utils.showFlashMessage('Interval regenerated in the working copy.');
+                        const message = job.inpaintExportPath
+                            ? `Interval regenerated and saved to ${job.inpaintExportPath}.`
+                            : 'Interval regenerated in the working copy.';
+                        Utils.showFlashMessage(message);
                     } catch (error) {
                         Utils.showFlashMessage(error.responseJSON?.message || 'Could not refresh revision history.', 'error');
                     }
@@ -1943,9 +1953,19 @@ $(document).ready(function() {
 
         async exportBeatmapset() {
             if (!this.session || this.busy) return false;
+            const suggestedName = this.suggestedExportName();
+            let destination = null;
+            if (window.pywebview?.api?.save_file) {
+                destination = await window.pywebview.api.save_file(suggestedName);
+            } else {
+                destination = window.prompt('Export destination (.osz):', suggestedName);
+            }
+            if (!destination) return false;
+            if (!destination.toLowerCase().endsWith('.osz')) destination += '.osz';
             try {
                 const response = await this.request('/inpaint/export', {
-                    session_id: this.session.session_id
+                    session_id: this.session.session_id,
+                    destination
                 });
                 this.renderSession(response.session);
                 Utils.showFlashMessage(`Exported ${response.path}.`);
@@ -1954,6 +1974,12 @@ $(document).ready(function() {
                 Utils.showFlashMessage(error.responseJSON?.message || 'Could not export beatmapset.', 'error');
                 return false;
             }
+        },
+
+        suggestedExportName() {
+            const sourceStem = (this.session?.source_name || 'beatmapset').replace(/\.osz$/i, '');
+            const revision = this.session?.revisions?.current_revision;
+            return `${sourceStem}-inpainted${revision == null ? '' : `-R${String(revision).padStart(3, '0')}`}.osz`;
         },
 
         async finishSession() {

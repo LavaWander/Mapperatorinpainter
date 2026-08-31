@@ -581,7 +581,7 @@
         if (hitsoundContext) preloadHitsounds();
     }
 
-    function loadAudio(map, targetTime) {
+    async function loadAudio(map, targetTime) {
         if (currentAudioUrl === map.audio_url) {
             seek(targetTime);
             return;
@@ -589,9 +589,18 @@
         currentAudioUrl = map.audio_url;
         audio.src = map.audio_url;
         audio.load();
-        const applyTarget = () => seek(targetTime);
-        if (audio.readyState >= 1) applyTarget();
-        else audio.addEventListener('loadedmetadata', applyTarget, { once: true });
+        if (audio.readyState < 1) {
+            await new Promise((resolve) => {
+                const finish = () => {
+                    audio.removeEventListener('loadedmetadata', finish);
+                    audio.removeEventListener('error', finish);
+                    resolve();
+                };
+                audio.addEventListener('loadedmetadata', finish, { once: true });
+                audio.addEventListener('error', finish, { once: true });
+            });
+        }
+        seek(targetTime);
     }
 
     async function attemptPlay({ quiet = false } = {}) {
@@ -679,8 +688,11 @@
             setStatus('Unsupported mode', 'error');
         } else if (mapChanged) {
             setStatus('Loading map…', 'busy');
+            // Freeze playback while replacing the scene. Parsing a full-song
+            // revision can take long enough for the old audio/scene pair to drift.
+            audio.pause();
             await loadScene(map);
-            loadAudio(map, targetTime);
+            await loadAudio(map, targetTime);
         } else {
             updateCursor(targetTime, { redraw: false });
         }

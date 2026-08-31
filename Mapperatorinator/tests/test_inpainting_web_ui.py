@@ -55,6 +55,8 @@ class InpaintWebUiTests(unittest.TestCase):
         root = Path(self.temporary_directory.name)
         self.source = root / "source.osz"
         write_archive(self.source, normal_entries())
+        self.original_output_directory = self.web_ui.INPAINT_OUTPUT_DIRECTORY
+        self.web_ui.INPAINT_OUTPUT_DIRECTORY = root / "inpaint_output"
         self.client = self.web_ui.app.test_client()
         self.headers = {self.web_ui.CSRF_HEADER_NAME: self.web_ui.LOCAL_UI_CSRF_TOKEN}
 
@@ -73,6 +75,7 @@ class InpaintWebUiTests(unittest.TestCase):
         snapshot = self.web_ui.preview_window_controller.snapshot()
         if snapshot.session_id:
             self.web_ui.preview_window_controller.clear_session(snapshot.session_id)
+        self.web_ui.INPAINT_OUTPUT_DIRECTORY = self.original_output_directory
         self.temporary_directory.cleanup()
 
     def post(self, path: str, data: dict):
@@ -111,7 +114,10 @@ class InpaintWebUiTests(unittest.TestCase):
             self.assertEqual(202, second.status_code)
 
         self.assertEqual(working_directory, str(self.web_ui._get_inpaint_session(session_id).working_directory))
-        self.assertTrue(self.web_ui._get_inpaint_session(session_id).dirty)
+        self.assertFalse(self.web_ui._get_inpaint_session(session_id).dirty)
+        automatic_outputs = list(self.web_ui.INPAINT_OUTPUT_DIRECTORY.glob("*.osz"))
+        self.assertEqual(1, len(automatic_outputs))
+        self.assertIn("__R001__seed-32__streams+stamina", automatic_outputs[0].stem)
         self.assertEqual(2, len(ensured_configs))
         self.assertTrue(all(config.use_server for config in ensured_configs))
         self.assertTrue(all(config.descriptors == ["skillset/streams", "streams/stamina"] for config in ensured_configs))
@@ -150,23 +156,22 @@ class InpaintWebUiTests(unittest.TestCase):
         self.assertEqual(200, discarded.status_code)
         self.assertFalse(session.working_directory.exists())
 
-    def test_inpaint_export_uses_automatic_unique_output_directory(self) -> None:
+    def test_manual_inpaint_export_uses_requested_destination(self) -> None:
         opened = self.post("/inpaint/open", {"path": str(self.source)})
         session_id = opened.get_json()["session"]["session_id"]
-        output_directory = Path(self.temporary_directory.name) / "inpaint_output"
+        destination = Path(self.temporary_directory.name) / "chosen" / "manual.osz"
 
-        with patch.object(self.web_ui, "INPAINT_OUTPUT_DIRECTORY", output_directory):
-            first = self.post("/inpaint/export", {"session_id": session_id})
-            second = self.post("/inpaint/export", {"session_id": session_id})
+        missing = self.post("/inpaint/export", {"session_id": session_id})
+        exported = self.post("/inpaint/export", {
+            "session_id": session_id,
+            "destination": str(destination),
+        })
 
-        self.assertEqual(200, first.status_code)
-        self.assertEqual(200, second.status_code)
-        first_path = Path(first.get_json()["path"])
-        second_path = Path(second.get_json()["path"])
-        self.assertEqual(output_directory, first_path.parent)
-        self.assertTrue(first_path.name.endswith("__R000__original.osz"))
-        self.assertTrue(second_path.stem.endswith("__02"))
-        self.assertNotEqual(first_path, second_path)
+        self.assertEqual(400, missing.status_code)
+        self.assertIn("destination", missing.get_json()["message"].lower())
+        self.assertEqual(200, exported.status_code)
+        self.assertEqual(destination.resolve(), Path(exported.get_json()["path"]))
+        self.assertTrue(destination.is_file())
 
     def test_open_song_folder_endpoint_uses_working_copy(self) -> None:
         source_folder = Path(self.temporary_directory.name) / "song-folder"

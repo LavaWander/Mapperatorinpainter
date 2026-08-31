@@ -1083,7 +1083,13 @@ def export_inpaint_session():
         session = _get_inpaint_session(session_id)
         if _session_has_active_job(session_id):
             raise ValueError("Wait for regeneration to finish before exporting.")
-        destination = session.export(session.next_export_path(INPAINT_OUTPUT_DIRECTORY))
+        requested_destination = (request.form.get('destination') or '').strip()
+        if not requested_destination:
+            raise ValueError("Choose an export destination first.")
+        destination = session.export(
+            requested_destination,
+            overwrite=(request.form.get('overwrite') == 'true'),
+        )
         return jsonify({
             "status": "success",
             "path": str(destination),
@@ -1479,6 +1485,14 @@ def stream_output():
                             path=rec["inpaint_path"],
                             metadata=rec["inpaint_revision_metadata"],
                         )
+                        try:
+                            automatic_output = session.export(
+                                session.next_export_path(INPAINT_OUTPUT_DIRECTORY)
+                            )
+                            yield f"event: inpaint_export\ndata: {automatic_output}\n\n"
+                        except Exception as export_exc:
+                            traceback.print_exc()
+                            yield f"event: inpaint_export_error\ndata: {export_exc}\n\n"
                     else:
                         restore_snapshot(rec["inpaint_path"], rec["inpaint_snapshot"])
                 except Exception:
