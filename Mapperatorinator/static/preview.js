@@ -26,11 +26,14 @@
     let lastMapIdentity = null;
     let currentAudioUrl = null;
     let timelineDragging = false;
+    let timelineResumeAfterDrag = false;
+    let scrubCommitGeneration = 0;
     let pollTimer = null;
     let toastTimer = null;
     let danserLaunching = false;
     let danserRunning = false;
     let audioWasUsed = false;
+    let audioLoadGeneration = 0;
     let hitsoundContext = null;
     let nextHitsoundIndex = 0;
     let lastHitsoundTime = null;
@@ -235,7 +238,7 @@
         context.restore();
     }
 
-    function drawSlider(context, object, now, transform, color, alpha) {
+    function drawSlider(context, object, transform, color, alpha) {
         const path = object.path || [];
         if (path.length < 2) return;
         const radius = scene.circle_radius * transform.scale;
@@ -259,26 +262,32 @@
         context.stroke();
         context.restore();
 
-        if (now >= object.time && now <= object.end_time) {
-            const spans = Math.max(1, object.repeat || 1);
-            const overall = clamp((now - object.time) / Math.max(1, object.end_time - object.time), 0, 1) * spans;
-            const spanIndex = Math.min(spans - 1, Math.floor(overall));
-            let progress = overall - spanIndex;
-            if (spanIndex % 2 === 1) progress = 1 - progress;
-            const point = pointOnPath(path, progress);
-            const x = transform.left + point[0] * transform.scale;
-            const y = transform.top + point[1] * transform.scale;
-            context.save();
-            context.globalAlpha = alpha;
-            context.fillStyle = '#ffffff';
-            context.strokeStyle = color;
-            context.lineWidth = 4;
-            context.beginPath();
-            context.arc(x, y, radius * 0.72, 0, Math.PI * 2);
-            context.fill();
-            context.stroke();
-            context.restore();
-        }
+    }
+
+    function drawSliderBall(context, object, now, transform, color, alpha) {
+        const path = object.path || [];
+        if (path.length < 2 || now < object.time || now > object.end_time) return;
+        const radius = scene.circle_radius * transform.scale;
+        const spans = Math.max(1, object.repeat || 1);
+        const overall = clamp((now - object.time) / Math.max(1, object.end_time - object.time), 0, 1) * spans;
+        const spanIndex = Math.min(spans - 1, Math.floor(overall));
+        let progress = overall - spanIndex;
+        if (spanIndex % 2 === 1) progress = 1 - progress;
+        const point = pointOnPath(path, progress);
+        const x = transform.left + point[0] * transform.scale;
+        const y = transform.top + point[1] * transform.scale;
+        context.save();
+        context.globalAlpha = alpha;
+        context.shadowColor = 'rgba(0, 0, 0, 0.8)';
+        context.shadowBlur = Math.max(5, radius * 0.28);
+        context.fillStyle = '#ffffff';
+        context.strokeStyle = color;
+        context.lineWidth = Math.max(4, radius * 0.14);
+        context.beginPath();
+        context.arc(x, y, radius * 0.76, 0, Math.PI * 2);
+        context.fill();
+        context.stroke();
+        context.restore();
     }
 
     function drawSliderRepeatMarkers(context, object, transform, color, alpha) {
@@ -405,7 +414,7 @@
         visible.forEach((object) => {
             if (object.type !== 'slider') return;
             const alpha = objectAlpha(object, now, preempt);
-            drawSlider(playfieldContext, object, now, transform, comboColors[object.color % comboColors.length], alpha);
+            drawSlider(playfieldContext, object, transform, comboColors[object.color % comboColors.length], alpha);
         });
 
         visible.forEach((object) => {
@@ -423,6 +432,21 @@
             if (object.type === 'slider') {
                 drawSliderRepeatMarkers(playfieldContext, object, transform, color, alpha);
             }
+        });
+
+        // Dynamic slider balls are a final overlay. In particular, keep them
+        // readable while they pass through repeat arrows and their count badges.
+        visible.forEach((object) => {
+            if (object.type !== 'slider') return;
+            const alpha = objectAlpha(object, now, preempt);
+            drawSliderBall(
+                playfieldContext,
+                object,
+                now,
+                transform,
+                comboColors[object.color % comboColors.length],
+                alpha
+            );
         });
 
         playfieldContext.fillStyle = 'rgba(255,255,255,0.48)';
@@ -554,10 +578,9 @@
         lastHitsoundTime = milliseconds;
     }
 
-    function updateCursor(milliseconds, { seekAudio = false, redraw = true } = {}) {
+    function updateCursor(milliseconds, { redraw = true } = {}) {
         if (!state?.map) return;
         currentTime = clamp(Math.round(milliseconds), 0, Math.max(0, state.map.length_ms - 1));
-        if (seekAudio && Number.isFinite(audio.duration)) audio.currentTime = currentTime / 1_000;
         document.getElementById('cursor-time').textContent = formatTimestamp(currentTime);
         timeline.setAttribute('aria-valuenow', currentTime);
         timeline.setAttribute('aria-valuetext', formatTimestamp(currentTime));
@@ -567,9 +590,31 @@
         }
     }
 
-    function seek(milliseconds) {
-        updateCursor(milliseconds, { seekAudio: true });
+    async function seek(milliseconds) {
+        if (!state?.map) return;
+        const target = clamp(Math.round(milliseconds), 0, Math.max(0, state.map.length_ms - 1));
+        updateCursor(target);
         resetHitsoundCursor(currentTime);
+        if (!Number.isFinite(audio.duration) || audio.readyState < 1) return;
+
+        const targetSeconds = target / 1_000;
+        if (Math.abs(audio.currentTime - targetSeconds) < 0.001) return;
+        await new Promise((resolve) => {
+            const settle = () => {
+                audio.removeEventListener('seeked', settle);
+                audio.removeEventListener('error', settle);
+                resolve();
+            };
+            audio.addEventListener('seeked', settle);
+            audio.addEventListener('error', settle);
+            try {
+                audio.currentTime = targetSeconds;
+                if (!audio.seeking) queueMicrotask(settle);
+            } catch (_) {
+                settle();
+            }
+        });
+        if (!timelineDragging) updateCursor(audio.currentTime * 1_000);
     }
 
     async function loadScene(map) {
@@ -581,12 +626,14 @@
         if (hitsoundContext) preloadHitsounds();
     }
 
-    async function loadAudio(map, targetTime, { forceReload = false } = {}) {
-        if (currentAudioUrl === map.audio_url && !forceReload) {
-            seek(targetTime);
-            return;
+    async function loadAudio(map, targetTime) {
+        if (currentAudioUrl === map.audio_url) {
+            await seek(targetTime);
+            return true;
         }
+        const loadGeneration = ++audioLoadGeneration;
         currentAudioUrl = map.audio_url;
+        audio.pause();
         audio.src = map.audio_url;
         audio.load();
         if (audio.readyState < 1) {
@@ -600,7 +647,9 @@
                 audio.addEventListener('error', finish, { once: true });
             });
         }
-        seek(targetTime);
+        if (loadGeneration !== audioLoadGeneration || currentAudioUrl !== map.audio_url) return false;
+        await seek(targetTime);
+        return true;
     }
 
     async function attemptPlay({ quiet = false } = {}) {
@@ -639,6 +688,7 @@
         document.getElementById('playfield-empty').hidden = hasMap;
 
         if (!hasMap) {
+            audioLoadGeneration += 1;
             audio.pause();
             audio.removeAttribute('src');
             audio.load();
@@ -665,13 +715,14 @@
         const mapChanged = map.key !== lastMapKey;
         const identityChanged = identity !== lastMapIdentity;
         const wasPlaying = !audio.paused;
-        let targetTime = currentTime;
+        const mediaTime = Number.isFinite(audio.currentTime) ? audio.currentTime * 1_000 : currentTime;
+        let targetTime = mediaTime;
         if (identityChanged || !hadMap) {
             targetTime = Math.max(0, state.selection.start_time - state.selection.padding_before);
         } else if (mapChanged && autoPlayUpdates.checked) {
             targetTime = Math.max(0, state.selection.start_time - state.selection.padding_before);
         } else {
-            targetTime = Math.min(currentTime, Math.max(0, map.length_ms - 1));
+            targetTime = Math.min(mediaTime, Math.max(0, map.length_ms - 1));
         }
 
         document.getElementById('map-title').textContent = `${map.artist} — ${map.title}`;
@@ -688,13 +739,11 @@
             setStatus('Unsupported mode', 'error');
         } else if (mapChanged) {
             setStatus('Loading map…', 'busy');
-            // Freeze playback while replacing the scene. Parsing a full-song
-            // revision can take long enough for the old audio/scene pair to drift.
+            // Freeze the stable media clock while the matching map scene is
+            // parsed. Inpainting revisions do not replace the audio asset.
             audio.pause();
             await loadScene(map);
-            // A fresh media pipeline per revision avoids retaining a decoder
-            // timeline that no longer belongs to the newly parsed scene.
-            await loadAudio(map, targetTime, { forceReload: true });
+            await loadAudio(map, targetTime);
         } else {
             updateCursor(targetTime, { redraw: false });
         }
@@ -796,6 +845,8 @@
 
     function animationFrame() {
         if (!audio.paused && state?.map) {
+            // The media element is the sole playback clock. Never integrate a
+            // separate wall-clock cursor, which can accumulate drift on stalls.
             const playbackTime = audio.currentTime * 1_000;
             updateCursor(playbackTime, { redraw: false });
             processHitsounds(playbackTime);
@@ -808,17 +859,37 @@
     timeline.addEventListener('pointerdown', (event) => {
         if (!state?.map) return;
         timelineDragging = true;
+        timelineResumeAfterDrag = !audio.paused;
+        scrubCommitGeneration += 1;
+        if (timelineResumeAfterDrag) pauseAudio();
         timeline.setPointerCapture(event.pointerId);
-        seek(positionFromPointer(event));
+        updateCursor(positionFromPointer(event));
+        resetHitsoundCursor(currentTime);
+        event.preventDefault();
     });
     timeline.addEventListener('pointermove', (event) => {
-        if (timelineDragging && state?.map) seek(positionFromPointer(event));
-    });
-    timeline.addEventListener('pointerup', (event) => {
         if (!timelineDragging || !state?.map) return;
-        timelineDragging = false;
-        seek(positionFromPointer(event));
+        updateCursor(positionFromPointer(event));
+        resetHitsoundCursor(currentTime);
+        event.preventDefault();
     });
+    async function finishTimelineScrub(event) {
+        if (!timelineDragging || !state?.map) return;
+        const target = event ? positionFromPointer(event) : currentTime;
+        const shouldResume = timelineResumeAfterDrag;
+        const commitGeneration = scrubCommitGeneration;
+        event?.preventDefault();
+        await seek(target);
+        if (commitGeneration !== scrubCommitGeneration) return;
+        timelineDragging = false;
+        timelineResumeAfterDrag = false;
+        updateCursor(audio.currentTime * 1_000);
+        if (shouldResume) {
+            await attemptPlay({ quiet: true });
+        }
+    }
+    timeline.addEventListener('pointerup', finishTimelineScrub);
+    timeline.addEventListener('pointercancel', finishTimelineScrub);
     timeline.addEventListener('keydown', (event) => {
         if (!state?.map) return;
         const step = event.shiftKey ? 5_000 : 1_000;
@@ -838,6 +909,12 @@
     });
     audio.addEventListener('ended', updatePlayButton);
     audio.addEventListener('seeking', () => resetHitsoundCursor(audio.currentTime * 1_000));
+    audio.addEventListener('seeked', () => {
+        if (!timelineDragging) updateCursor(audio.currentTime * 1_000);
+    });
+    audio.addEventListener('timeupdate', () => {
+        if (audio.paused && state?.map && !timelineDragging) updateCursor(audio.currentTime * 1_000);
+    });
     audio.addEventListener('error', () => {
         if (!currentAudioUrl) return;
         setStatus('Audio unavailable', 'error');

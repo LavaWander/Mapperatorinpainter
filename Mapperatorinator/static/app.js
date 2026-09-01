@@ -1801,7 +1801,7 @@ $(document).ready(function() {
             setValue('#inpaint_model', provenance.model);
             setValue('#inpaint_target_difficulty', provenance.difficulty);
             setValue('#inpaint_mapper_id', provenance.mapper_id);
-            setValue('#inpaint_year', provenance.year, 2024);
+            setValue('#inpaint_year', provenance.year);
             setValue('#inpaint_seed', provenance.seed);
             setValue('#inpaint_temperature', provenance.temperature);
             setValue('#inpaint_cfg_scale', provenance.cfg_scale);

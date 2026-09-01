@@ -17,7 +17,6 @@ from .workflow import build_inpainting_config
 
 _CLOCK_TIMESTAMP = re.compile(r"^(?P<minutes>\d+):(?P<seconds>\d{1,2})(?:\.(?P<milliseconds>\d{1,3}))?$")
 _RAW_SECONDS = re.compile(r"^\d+(?:\.\d{1,3})?$")
-DEFAULT_INPAINT_YEAR = 2024
 
 
 def parse_timestamp_ms(value: str) -> int:
@@ -90,8 +89,7 @@ def compose_inpainting_config(
     config = build_inpainting_config(config, session, start_time=start_time, end_time=end_time)
     config.difficulty = _optional_float(values.get("difficulty"))
     config.mapper_id = _optional_int(values.get("mapper_id"))
-    requested_year = _optional_int(values.get("year"))
-    config.year = DEFAULT_INPAINT_YEAR if requested_year is None else requested_year
+    config.year = _optional_int(values.get("year"))
     config.seed = _optional_int(values.get("seed"))
     for field in ("cfg_scale", "temperature", "top_p", "lookback", "lookahead"):
         value = _optional_float(values.get(field))

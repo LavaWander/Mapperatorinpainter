@@ -474,6 +474,21 @@ class InpaintWebUiTests(unittest.TestCase):
         ):
             self.assertIn(f'id="{control_id}"', html)
 
+    def test_preview_transport_reuses_audio_and_layers_slider_ball_last(self) -> None:
+        source = (Path(self.web_ui.script_dir) / "static" / "preview.js").read_text(encoding="utf-8")
+        draw_playfield = source[source.index("function drawPlayfield()") : source.index("function ensureHitsoundContext()")]
+
+        self.assertNotIn("forceReload", source)
+        self.assertIn("currentAudioUrl === map.audio_url", source)
+        self.assertIn("const mediaTime = Number.isFinite(audio.currentTime)", source)
+        self.assertLess(draw_playfield.index("drawSliderRepeatMarkers"), draw_playfield.index("drawSliderBall"))
+
+        pointer_move = source[source.index("timeline.addEventListener('pointermove'") : source.index("async function finishTimelineScrub")]
+        self.assertIn("updateCursor(positionFromPointer(event))", pointer_move)
+        self.assertNotIn("seek(positionFromPointer(event))", pointer_move)
+        self.assertIn("await seek(target)", source)
+        self.assertIn("audio.paused && state?.map && !timelineDragging", source)
+
 
 if __name__ == "__main__":
     unittest.main()
